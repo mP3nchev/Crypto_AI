@@ -1,0 +1,34 @@
+// Обработва символите като справочна таблица
+const symbolsData = $input.all();
+
+const now = new Date();
+const cycle_timestamp = now.toISOString();
+const year = now.getFullYear();
+const month = String(now.getMonth() + 1).padStart(2, '0');
+const day = String(now.getDate()).padStart(2, '0');
+const hour = String(now.getHours()).padStart(2, '0');
+const minute = String(now.getMinutes()).padStart(2, '0');
+const scan_cycle_id = `${year}-${month}-${day}_${hour}:${minute}`;
+
+const processedSymbols = symbolsData.map((symbolItem, index) => {
+  return {
+    json: {
+      symbol: symbolItem.json.symbol,
+      symbol_ticker: symbolItem.json.symbol.replace('USDT', '/USDT'),
+      volume: parseFloat(symbolItem.json.volume || 0),
+      quote_volume: parseFloat(symbolItem.json.quoteVolume || 0),
+      rank_position: index + 1,
+      cycle_timestamp: cycle_timestamp,
+      scan_cycle_id: scan_cycle_id,
+      date_added: new Date().toISOString().split('T')[0],
+      processed_at: new Date().toISOString(),
+      is_active: true,
+      exchange: 'binance',
+      base_asset: symbolItem.json.symbol.replace('USDT', ''),
+      quote_asset: 'USDT'
+    }
+  };
+});
+
+console.log("Symbols processed:", processedSymbols.length);
+return processedSymbols;
