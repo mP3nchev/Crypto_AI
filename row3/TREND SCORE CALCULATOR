@@ -1,0 +1,346 @@
+// =====================================================
+// TREND SCORE CALCULATOR v3.0 - FIXED DIRECTION LOGIC
+// =====================================================
+// КРИТИЧЕН FIX: Разделяне на Trend Strength vs Trend Direction
+// - ADX определя СИЛАТА на тренда (колко силен е)
+// - MACD + EMA определят ПОСОКАТА (LONG/SHORT)
+// =====================================================
+
+console.log('📊 ═══════════════════════════════════════════════');
+console.log('   TREND SCORE CALCULATOR v3.0 (FIXED)');
+console.log('═══════════════════════════════════════════════');
+
+const inputData = $input.all();
+console.log(`📊 Calculating trend scores for ${inputData.length} symbols`);
+
+if (inputData.length === 0) {
+  console.log('⚠️ No input data received');
+  return [];
+}
+
+// =====================================================
+// HELPER FUNCTIONS
+// =====================================================
+function getScanData(data) {
+  if (data.scan_data) return data.scan_data;
+  return data;
+}
+
+function safeFloat(value, defaultValue = 0) {
+  const parsed = parseFloat(value);
+  return isNaN(parsed) ? defaultValue : parsed;
+}
+
+// =====================================================
+// TREND SCORING LOGIC (FIXED)
+// =====================================================
+function calculateTrendScore(data) {
+  let totalScore = 0;
+  let maxScore = 0;
+  let adxContribution = 0;
+  let macdContribution = 0;
+  let emaContribution = 0;
+  
+  // Separate variables for strength vs direction
+  let trendStrength = 'WEAK';      // WEAK/MODERATE/STRONG
+  let trendDirection = 'NEUTRAL';  // LONG/SHORT/NEUTRAL
+
+  const scanData = getScanData(data);
+  
+  console.log(`\n  📊 Analyzing Trend for ${data.symbol || 'symbol'}`);
+  
+  // =====================================================
+  // COMPONENT 1: ADX - TREND STRENGTH (40 points max)
+  // =====================================================
+  // ADX shows HOW STRONG the trend is, NOT the direction
+  const adx_2h = safeFloat(scanData.adx_2h);
+  
+  if (adx_2h > 0) {
+    maxScore += 40;
+    
+    console.log(`    ADX 2h: ${adx_2h.toFixed(2)}`);
+    
+    if (adx_2h >= 25) {
+      adxContribution = 40;
+      trendStrength = 'STRONG';
+      console.log(`    ✅ Strong Trend (ADX >= 25): +40 points`);
+    } else if (adx_2h >= 20) {
+      adxContribution = 30;
+      trendStrength = 'MODERATE';
+      console.log(`    ✅ Moderate Trend (ADX 20-24): +30 points`);
+    } else if (adx_2h >= 15) {
+      adxContribution = 20;
+      trendStrength = 'WEAK';
+      console.log(`    ⚠️ Weak Trend (ADX 15-19): +20 points`);
+    } else {
+      adxContribution = 10;
+      trendStrength = 'RANGING';
+      console.log(`    📊 Ranging Market (ADX < 15): +10 points`);
+    }
+    
+    totalScore += adxContribution;
+  } else {
+    console.log(`    ⚠️ ADX data missing`);
+  }
+  
+  // =====================================================
+  // COMPONENT 2: MACD - TREND DIRECTION & MOMENTUM (30 points max)
+  // =====================================================
+  // MACD determines the DIRECTION (bullish/bearish)
+  const macd_value_2h = safeFloat(scanData.macd_value_2h);
+  const macd_signal_2h = safeFloat(scanData.macd_signal_2h);
+  const macd_histogram_2h = safeFloat(scanData.macd_histogram_2h);
+  const macd_value_1h = safeFloat(scanData.macd_value_1h);
+  const macd_signal_1h = safeFloat(scanData.macd_signal_1h);
+  const macd_histogram_1h = safeFloat(scanData.macd_histogram_1h);
+  
+  if (macd_value_2h !== 0 || macd_signal_2h !== 0) {
+    maxScore += 30;
+    
+    console.log(`    MACD 2h: Value=${macd_value_2h.toFixed(8)}, Signal=${macd_signal_2h.toFixed(8)}, Hist=${macd_histogram_2h.toFixed(8)}`);
+    console.log(`    MACD 1h: Hist=${macd_histogram_1h.toFixed(8)}`);
+    
+    // Determine primary direction from 2h MACD
+    const macd_bullish_2h = macd_histogram_2h > 0;
+    const macd_bullish_1h = macd_histogram_1h > 0;
+    
+    // Set initial direction from 2h timeframe
+    if (macd_bullish_2h) {
+      trendDirection = 'LONG';
+      console.log(`    📈 MACD Direction: BULLISH (LONG)`);
+    } else if (macd_histogram_2h < 0) {
+      trendDirection = 'SHORT';
+      console.log(`    📉 MACD Direction: BEARISH (SHORT)`);
+    }
+    
+    // Score MACD quality
+    const histogram_strength_2h = Math.abs(macd_histogram_2h);
+    const histogram_strength_1h = Math.abs(macd_histogram_1h);
+    
+    // A. Multi-timeframe confirmation (15 points)
+    if (macd_bullish_2h === macd_bullish_1h) {
+      macdContribution += 15;
+      console.log(`    ✅ 2h/1h MACD alignment: +15 points`);
+    } else {
+      macdContribution += 5;
+      console.log(`    ⚠️ 2h/1h MACD divergence: +5 points`);
+    }
+    
+  // B. Histogram strength (15 points) — Relative threshold (TRADING_PRINCIPLES §2.1)
+    const MACD_STRONG_PCT  = { 1: 0.01, 2: 0.05, 3: 0.10 };
+    const MACD_MODERATE_PCT = { 1: 0.005, 2: 0.025, 3: 0.05 };
+    const symbolTier = parseInt(data.tier || 2);
+    const closePrice = safeFloat(data.close_price);
+    
+    const histogramPct = closePrice > 0
+      ? (histogram_strength_2h / closePrice) * 100
+      : 0;
+    
+    const strongThreshold   = MACD_STRONG_PCT[symbolTier]   || MACD_STRONG_PCT[2];
+    const moderateThreshold = MACD_MODERATE_PCT[symbolTier] || MACD_MODERATE_PCT[2];
+    
+    if (histogramPct >= strongThreshold) {
+      macdContribution += 15;
+      console.log(`    ✅ Strong MACD momentum: ${histogramPct.toFixed(4)}% >= ${strongThreshold}% (Tier ${symbolTier}): +15 pts`);
+    } else if (histogramPct >= moderateThreshold) {
+      macdContribution += 10;
+      console.log(`    ✅ Moderate MACD momentum: ${histogramPct.toFixed(4)}% >= ${moderateThreshold}% (Tier ${symbolTier}): +10 pts`);
+    } else {
+      macdContribution += 5;
+      console.log(`    ⚠️ Weak MACD momentum: ${histogramPct.toFixed(4)}% < ${moderateThreshold}% (Tier ${symbolTier}): +5 pts`);
+    }
+  
+  // =====================================================
+  // COMPONENT 3: EMA ALIGNMENT - TREND CONFIRMATION (30 points max)
+  // =====================================================
+  // EMA alignment confirms and refines the direction
+  const ema_20_2h = safeFloat(scanData.ema_20_2h);
+  const ema_50_2h = safeFloat(scanData.ema_50_2h);
+  const ema_200_2h = safeFloat(scanData.ema_200_2h);
+  const close_price = safeFloat(data.close_price);
+  
+  if (ema_20_2h > 0 && ema_50_2h > 0 && close_price > 0) {
+    maxScore += 30;
+    
+    console.log(`    Price: ${close_price.toFixed(8)}`);
+    console.log(`    EMA20: ${ema_20_2h.toFixed(8)}, EMA50: ${ema_50_2h.toFixed(8)}, EMA200: ${ema_200_2h.toFixed(8)}`);
+    
+    // Perfect bullish alignment: Price > EMA20 > EMA50 (> EMA200)
+    const bullish_alignment = close_price > ema_20_2h && ema_20_2h > ema_50_2h;
+    
+    // Perfect bearish alignment: Price < EMA20 < EMA50 (< EMA200)
+    const bearish_alignment = close_price < ema_20_2h && ema_20_2h < ema_50_2h;
+    
+    if (bullish_alignment) {
+      emaContribution = 30;
+      console.log(`    ✅ Perfect Bullish EMA Alignment: +30 points`);
+      
+      // If MACD didn't set direction, EMA does
+      if (trendDirection === 'NEUTRAL') {
+        trendDirection = 'LONG';
+        console.log(`    📈 Direction set to LONG (from EMA)`);
+      }
+      
+      // If MACD said SHORT but EMA says LONG, conflict
+      if (trendDirection === 'SHORT') {
+        console.log(`    ⚠️ CONFLICT: MACD=SHORT, EMA=LONG → Reducing confidence`);
+        emaContribution = 15; // Reduce points due to conflict
+      }
+      
+    } else if (bearish_alignment) {
+      emaContribution = 30;
+      console.log(`    ✅ Perfect Bearish EMA Alignment: +30 points`);
+      
+      // If MACD didn't set direction, EMA does
+      if (trendDirection === 'NEUTRAL') {
+        trendDirection = 'SHORT';
+        console.log(`    📉 Direction set to SHORT (from EMA)`);
+      }
+      
+      // If MACD said LONG but EMA says SHORT, conflict
+      if (trendDirection === 'LONG') {
+        console.log(`    ⚠️ CONFLICT: MACD=LONG, EMA=SHORT → Reducing confidence`);
+        emaContribution = 15; // Reduce points due to conflict
+      }
+      
+    } else if (close_price > ema_20_2h) {
+      emaContribution = 15;
+      console.log(`    ⚠️ Partial Bullish (Price > EMA20): +15 points`);
+    } else if (close_price < ema_20_2h) {
+      emaContribution = 15;
+      console.log(`    ⚠️ Partial Bearish (Price < EMA20): +15 points`);
+    } else {
+      emaContribution = 5;
+      console.log(`    ⚠️ No clear EMA trend: +5 points`);
+    }
+    
+    totalScore += emaContribution;
+  } else {
+    console.log(`    ⚠️ EMA data incomplete`);
+  }
+  
+  // =====================================================
+  // CALCULATE FINAL SCORE
+  // =====================================================
+  const finalScore = maxScore > 0 ? Math.round((totalScore / maxScore) * 100) : 0;
+  
+  console.log(`\n    📊 Trend Score Breakdown:`);
+  console.log(`      ADX:  ${adxContribution}/${maxScore > 0 ? 40 : 0} points`);
+  console.log(`      MACD: ${macdContribution}/${maxScore > 30 ? 30 : 0} points`);
+  console.log(`      EMA:  ${emaContribution}/${maxScore > 60 ? 30 : 0} points`);
+  console.log(`      ─────────────────────────`);
+  console.log(`      Total: ${totalScore}/${maxScore} → ${finalScore}/100`);
+  console.log(`\n    🎯 Trend Strength: ${trendStrength}`);
+  console.log(`    🎯 Trend Direction: ${trendDirection}`);
+  
+  return {
+    score: finalScore,
+    components: {
+      adx_contribution: adxContribution,
+      macd_contribution: macdContribution,
+      ema_contribution: emaContribution
+    },
+    trend_strength: trendStrength,      // WEAK/MODERATE/STRONG/RANGING
+    trend_direction: trendDirection,    // LONG/SHORT/NEUTRAL
+    signal_direction: trendDirection,
+    macd_histogram_pct: histogramPct,
+  };
+}
+
+// =====================================================
+// PROCESS EACH SYMBOL
+// =====================================================
+const results = inputData.map((item, index) => {
+  const data = item.json;
+  
+  console.log(`\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━`);
+  console.log(`📋 Symbol ${index + 1}/${inputData.length}: ${data.symbol}`);
+  console.log(`━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━`);
+  
+  const trend = calculateTrendScore(data);
+  
+  return {
+    json: {
+      // ═══════════════════════════════════════════════
+      // PASS-THROUGH ALL EXISTING DATA
+      // ═══════════════════════════════════════════════
+      ...data,
+      
+      // ═══════════════════════════════════════════════
+      // TREND SCORE OUTPUT
+      // ═══════════════════════════════════════════════
+      trend_score: trend.score,
+      trend_components: trend.components,
+      
+        // ═══════════════════════════════════════════════
+      // TREND CLASSIFICATION (FIXED)
+      // ═══════════════════════════════════════════════
+      trend_strength: trend.trend_strength,          // WEAK/MODERATE/STRONG/RANGING
+      trend_direction: trend.trend_direction,        // LONG/SHORT/NEUTRAL ✅ FIXED!
+      macd_histogram_pct: trend.macd_histogram_pct,  // MACD relative % audit
+      
+      // ═══════════════════════════════════════════════
+      // TIMESTAMPS
+      // ═══════════════════════════════════════════════
+      trend_scored_at: new Date().toISOString(),
+      trend_calculator_version: 'v3.0 (Fixed Direction Logic)'
+    }
+  };
+});
+
+// =====================================================
+// SUMMARY STATISTICS
+// =====================================================
+console.log(`\n\n╔════════════════════════════════════════════════════╗`);
+console.log(`║     TREND SCORING SUMMARY                          ║`);
+console.log(`╚════════════════════════════════════════════════════╝`);
+console.log(`✅ Trend scoring complete for ${results.length} symbols`);
+
+const avgScore = results.reduce((sum, r) => sum + (r.json.trend_score || 0), 0) / results.length;
+console.log(`\n📊 Average Trend Score: ${avgScore.toFixed(1)}/100`);
+
+// Trend Direction Distribution
+const directionCounts = results.reduce((acc, r) => {
+  const dir = r.json.trend_direction;
+  acc[dir] = (acc[dir] || 0) + 1;
+  return acc;
+}, {});
+
+console.log(`\n📈 Trend Direction Distribution:`);
+Object.entries(directionCounts)
+  .sort((a, b) => b[1] - a[1])
+  .forEach(([dir, count]) => {
+    const pct = ((count / results.length) * 100).toFixed(1);
+    console.log(`  ${dir}: ${count} symbols (${pct}%)`);
+  });
+
+// Trend Strength Distribution
+const strengthCounts = results.reduce((acc, r) => {
+  const strength = r.json.trend_strength;
+  acc[strength] = (acc[strength] || 0) + 1;
+  return acc;
+}, {});
+
+console.log(`\n💪 Trend Strength Distribution:`);
+Object.entries(strengthCounts)
+  .sort((a, b) => b[1] - a[1])
+  .forEach(([strength, count]) => {
+    const pct = ((count / results.length) * 100).toFixed(1);
+    console.log(`  ${strength}: ${count} symbols (${pct}%)`);
+  });
+
+// Top Trends
+console.log(`\n🏆 Top 5 Trend Scores:`);
+results
+  .sort((a, b) => b.json.trend_score - a.json.trend_score)
+  .slice(0, 5)
+  .forEach((r, i) => {
+    console.log(`  ${i + 1}. ${r.json.symbol}: ${r.json.trend_score}/100 (${r.json.trend_direction}, ${r.json.trend_strength})`);
+  });
+
+console.log(`\n✅ Ready for MERGE`);
+
+// =====================================================
+// RETURN RESULTS
+// =====================================================
+return results;
