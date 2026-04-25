@@ -1,0 +1,315 @@
+// =====================================================
+// NODE 7: TECHNICAL LEVEL IDENTIFIER v3.0 - ATR-BASED
+// =====================================================
+// Получава от Risk/Reward Score Output:
+// - current_price, signal_direction
+// - vwap_1h, ema_20_1h, ema_50_1h
+// - atr_1h (for ATR-based entry zones)
+// - high_price, low_price (recent extremes)
+//
+// Изчислява:
+// - ATR-scaled entry zones (auto-adaptive to volatility)
+// - VWAP quality scoring (confirmation, not target)
+// - Entry quality grade (EXCELLENT/GOOD/FAIR)
+//
+// CRITICAL FIX: Uses current price ± ATR instead of targeting VWAP
+// =====================================================
+
+console.log('🎯 ═══════════════════════════════════════════════');
+console.log('   TECHNICAL LEVEL IDENTIFIER v3.0 - ATR-BASED');
+console.log('═══════════════════════════════════════════════');
+
+const inputData = $input.all();
+console.log(`📊 Identifying technical levels for ${inputData.length} symbols`);
+
+if (inputData.length === 0) {
+  console.log('⚠️ No input data received');
+  return [];
+}
+
+// =====================================================
+// ENTRY ZONE CALCULATION FUNCTION
+// =====================================================
+function calculateEntryZone(data) {
+  const symbol = data.symbol || 'UNKNOWN';
+  const currentPrice = parseFloat(data.latest_1m_price || data.current_price || data.close_price || 0);
+  const signalDirection = data.signal_direction || 'NEUTRAL';
+  
+  // Technical levels for reference
+  const vwap1h = parseFloat(data.vwap_1h || 0);
+  const ema20_1h = parseFloat(data.ema_20_1h || 0);
+  const ema50_1h = parseFloat(data.ema_50_1h || 0);
+  const highPrice = parseFloat(data.high_price || 0);
+  const lowPrice = parseFloat(data.low_price || 0);
+  
+  console.log(`\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━`);
+  console.log(`📋 Symbol: ${symbol}`);
+  console.log(`━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━`);
+  console.log(`  Current Price: ${currentPrice.toFixed(8)}`);
+  console.log(`  VWAP 1h: ${vwap1h > 0 ? vwap1h.toFixed(8) : 'N/A'}`);
+  console.log(`  EMA20 1h: ${ema20_1h > 0 ? ema20_1h.toFixed(8) : 'N/A'}`);
+  console.log(`  EMA50 1h: ${ema50_1h > 0 ? ema50_1h.toFixed(8) : 'N/A'}`);
+  console.log(`  Signal Direction: ${signalDirection}`);
+  
+  // Validate inputs
+  if (currentPrice <= 0 || !['LONG', 'SHORT'].includes(signalDirection)) {
+    console.log(`  ❌ Invalid data for entry zone calculation`);
+    return null;
+  }
+  
+  // =====================================================
+  // IDENTIFY KEY TECHNICAL LEVELS
+  // =====================================================
+  const technicalLevels = [];
+  
+  if (vwap1h > 0) {
+    technicalLevels.push({ level: vwap1h, type: 'VWAP', strength: 'HIGH' });
+  }
+  if (ema20_1h > 0) {
+    technicalLevels.push({ level: ema20_1h, type: 'EMA20', strength: 'MEDIUM' });
+  }
+  if (ema50_1h > 0) {
+    technicalLevels.push({ level: ema50_1h, type: 'EMA50', strength: 'HIGH' });
+  }
+  if (highPrice > 0) {
+    technicalLevels.push({ level: highPrice, type: 'HIGH', strength: 'MEDIUM' });
+  }
+  if (lowPrice > 0) {
+    technicalLevels.push({ level: lowPrice, type: 'LOW', strength: 'MEDIUM' });
+  }
+  
+  console.log(`  📍 Technical Levels Identified: ${technicalLevels.length}`);
+  
+  // =====================================================
+  // CALCULATE ATR-BASED ENTRY ZONE (UNIVERSAL)
+  // =====================================================
+  // Million-dollar formula: ATR-scaled zones that auto-adapt to volatility
+  const atr = parseFloat(data.atr_1h || data.current_atr_1h || 0);
+  
+  // Validate ATR availability
+  if (atr <= 0) {
+    console.log(`  ❌ ATR data missing - cannot calculate entry zone`);
+    return null;
+  }
+  
+  // Calculate ATR-based range (0.25x ATR, capped at 1.5% max width)
+  const maxRangePct = 0.015; // 1.5% maximum width
+  const atrRange = Math.min(0.25 * atr, currentPrice * maxRangePct);
+  
+  // Universal entry zone (same for LONG and SHORT)
+  const entryMin = currentPrice - atrRange;
+  const entryMax = currentPrice + atrRange;
+  
+  // Calculate entry zone width for logging
+  const entryWidthPct = ((entryMax - entryMin) / currentPrice) * 100;
+  
+  console.log(`\n  💎 ATR-Based Entry Zone Calculation:`);
+  console.log(`     ATR 1h: $${atr.toFixed(8)}`);
+  console.log(`     ATR Range: $${atrRange.toFixed(8)} (0.25x ATR)`);
+  console.log(`     Entry Width: ${entryWidthPct.toFixed(2)}%`);
+  
+  // =====================================================
+  // VWAP QUALITY SCORING (CONFIRMATION, NOT TARGET)
+  // =====================================================
+  let entryQuality = 'FAIR';
+  let entryZoneType = 'ATR_BASED';
+  let primaryLevel = currentPrice;
+  let vwapDistance = null;
+  
+  if (vwap1h > 0) {
+    vwapDistance = Math.abs((currentPrice - vwap1h) / currentPrice) * 100;
+    
+    if (signalDirection === 'LONG') {
+      // LONG: VWAP should be BELOW as support
+      if (vwap1h < currentPrice) {
+        if (vwapDistance <= 1.0) {
+          entryQuality = 'EXCELLENT';
+          entryZoneType = 'ATR_AT_VWAP_SUPPORT';
+          primaryLevel = vwap1h;
+          console.log(`  🎯 EXCELLENT: Entry at VWAP support (${vwapDistance.toFixed(2)}% away)`);
+        } else if (vwapDistance <= 5.0) {
+          entryQuality = 'GOOD';
+          entryZoneType = 'ATR_NEAR_VWAP_SUPPORT';
+          primaryLevel = vwap1h;
+          console.log(`  ✅ GOOD: VWAP support ${vwapDistance.toFixed(2)}% below`);
+        } else {
+          console.log(`  ⚠️ FAIR: VWAP support far away (${vwapDistance.toFixed(2)}%)`);
+        }
+      } else {
+        console.log(`  ⚠️ WARNING: VWAP above price for LONG (should be below)`);
+      }
+      
+    } else if (signalDirection === 'SHORT') {
+      // SHORT: VWAP should be ABOVE as resistance
+      if (vwap1h > currentPrice) {
+        if (vwapDistance <= 1.0) {
+          entryQuality = 'EXCELLENT';
+          entryZoneType = 'ATR_AT_VWAP_RESISTANCE';
+          primaryLevel = vwap1h;
+          console.log(`  🎯 EXCELLENT: Entry at VWAP resistance (${vwapDistance.toFixed(2)}% away)`);
+        } else if (vwapDistance <= 5.0) {
+          entryQuality = 'GOOD';
+          entryZoneType = 'ATR_NEAR_VWAP_RESISTANCE';
+          primaryLevel = vwap1h;
+          console.log(`  ✅ GOOD: VWAP resistance ${vwapDistance.toFixed(2)}% above`);
+        } else {
+          console.log(`  ⚠️ FAIR: VWAP resistance far away (${vwapDistance.toFixed(2)}%)`);
+        }
+      } else {
+        console.log(`  ⚠️ WARNING: VWAP below price for SHORT (should be above)`);
+      }
+    }
+  } else {
+    console.log(`  📊 No VWAP data - using ATR-only entry zone`);
+  }
+  
+  // =====================================================
+  // LOG FINAL ENTRY ZONE
+  // =====================================================
+  console.log(`\n  📊 Entry Zone Calculated:`);
+  console.log(`     Min: ${entryMin.toFixed(8)}`);
+  console.log(`     Max: ${entryMax.toFixed(8)}`);
+  console.log(`     Primary Level: ${primaryLevel.toFixed(8)} (${entryZoneType})`);
+  console.log(`     Distance: ${entryWidthPct.toFixed(2)}%`);
+  console.log(`     Quality: ${entryQuality}`);
+  console.log(`  ✅ Entry zone calculated successfully`);
+  
+  // =====================================================
+  // RETURN ENTRY ZONE DATA
+  // =====================================================
+  return {
+    entry_min: entryMin,
+    entry_max: entryMax,
+    entry_zone_type: entryZoneType,
+    entry_quality: entryQuality,
+    primary_level: primaryLevel,
+    entry_width_pct: entryWidthPct,
+    vwap_distance_pct: vwapDistance,
+    technical_levels_count: technicalLevels.length,
+    atr_used: atr,
+    atr_range: atrRange
+  };
+}
+
+// =====================================================
+// PROCESS EACH SYMBOL
+// =====================================================
+const results = inputData.map(item => {
+  const data = item.json;
+  const entryZone = calculateEntryZone(data);
+  
+  // If calculation failed, return with error flag
+  if (!entryZone) {
+    return {
+      json: {
+        ...data,
+        entry_calculated: false,
+        entry_error: 'Failed to calculate entry zone (missing ATR or invalid price)'
+      }
+    };
+  }
+  
+  // Success - return with entry zone data
+  return {
+    json: {
+      // ═══════════════════════════════════════════════
+      // PASS-THROUGH ALL EXISTING DATA
+      // ═══════════════════════════════════════════════
+      ...data,
+      
+      // ═══════════════════════════════════════════════
+      // ENTRY ZONE DATA (NEW)
+      // ═══════════════════════════════════════════════
+      entry_min: entryZone.entry_min,
+      entry_max: entryZone.entry_max,
+      entry_zone_type: entryZone.entry_zone_type,
+      entry_quality: entryZone.entry_quality,
+      primary_level: entryZone.primary_level,
+      entry_width_pct: entryZone.entry_width_pct,
+      vwap_distance_pct: entryZone.vwap_distance_pct,
+      technical_levels_count: entryZone.technical_levels_count,
+      atr_used: entryZone.atr_used,
+      atr_range: entryZone.atr_range,
+      
+      // ═══════════════════════════════════════════════
+      // METADATA
+      // ═══════════════════════════════════════════════
+      entry_calculated: true,
+      entry_calculation_version: 'v3.0_ATR_BASED',
+      entry_calculated_at: new Date().toISOString()
+    }
+  };
+});
+
+// =====================================================
+// SUMMARY STATISTICS
+// =====================================================
+console.log(`\n\n╔════════════════════════════════════════════════════╗`);
+console.log(`║     TECHNICAL LEVEL IDENTIFICATION SUMMARY        ║`);
+console.log(`╚════════════════════════════════════════════════════╝`);
+
+const successful = results.filter(r => r.json.entry_calculated).length;
+const failed = results.filter(r => !r.json.entry_calculated).length;
+
+console.log(`📊 Total Signals Processed: ${results.length}`);
+console.log(`✅ Successfully Calculated: ${successful}`);
+console.log(`❌ Failed: ${failed}`);
+
+if (successful > 0) {
+  // Entry zone type distribution
+  const entryTypes = results
+    .filter(r => r.json.entry_calculated)
+    .reduce((acc, r) => {
+      const type = r.json.entry_zone_type;
+      acc[type] = (acc[type] || 0) + 1;
+      return acc;
+    }, {});
+  
+  console.log(`\n📍 Entry Zone Type Distribution:`);
+  Object.entries(entryTypes).forEach(([type, count]) => {
+    console.log(`  ${type}: ${count} signals`);
+  });
+  
+  // Entry quality distribution
+  const qualityDist = results
+    .filter(r => r.json.entry_calculated)
+    .reduce((acc, r) => {
+      const quality = r.json.entry_quality;
+      acc[quality] = (acc[quality] || 0) + 1;
+      return acc;
+    }, {});
+  
+  console.log(`\n🎖️ Entry Quality Distribution:`);
+  Object.entries(qualityDist).forEach(([quality, count]) => {
+    console.log(`  ${quality}: ${count} signals`);
+  });
+  
+  // Average metrics
+  const avgWidth = results
+    .filter(r => r.json.entry_calculated)
+    .reduce((sum, r) => sum + r.json.entry_width_pct, 0) / successful;
+  
+  console.log(`\n📊 Average Entry Zone Width: ${avgWidth.toFixed(2)}%`);
+  
+  // Top 3 by quality
+  console.log(`\n🏆 Top 3 Entry Zones by Quality:`);
+  results
+    .filter(r => r.json.entry_calculated)
+    .sort((a, b) => {
+      const qualityOrder = { 'EXCELLENT': 3, 'GOOD': 2, 'FAIR': 1 };
+      return qualityOrder[b.json.entry_quality] - qualityOrder[a.json.entry_quality];
+    })
+    .slice(0, 3)
+    .forEach((r, i) => {
+      console.log(`  ${i + 1}. ${r.json.symbol}: ${r.json.entry_quality} (${r.json.entry_zone_type})`);
+      console.log(`     Zone: ${r.json.entry_min.toFixed(8)} - ${r.json.entry_max.toFixed(8)}`);
+    });
+}
+
+console.log(`\n✅ Technical Level Identification Complete`);
+console.log(`📤 Passing ${results.length} signals to Entry Zone Validator`);
+
+// =====================================================
+// RETURN RESULTS
+// =====================================================
+return results;
