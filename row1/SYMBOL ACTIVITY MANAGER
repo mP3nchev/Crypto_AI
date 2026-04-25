@@ -1,0 +1,21 @@
+const currentItems = $("Crypto Symbols Insert").all();
+const activeInDB = $input.all();
+
+const currentSymbols = new Set(currentItems.map(i => i.json.symbol));
+const now = currentItems[0]?.json.cycle_timestamp ?? new Date().toISOString();
+
+// Деактивирай изпадналите символи
+for (const row of activeInDB) {
+  const sym = row.json?.symbol;
+  if (sym && !currentSymbols.has(sym)) {
+    // Маркирай за деактивиране - ще се handle от Update Symbol Status
+    currentItems.push({ json: {
+      symbol: sym,
+      is_active: false,
+      last_seen_at: now,
+      _deactivate: true
+    }});
+  }
+}
+
+return currentItems.map(i => ({ json: i.json }));
