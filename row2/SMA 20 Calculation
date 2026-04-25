@@ -1,0 +1,96 @@
+// =====================================================
+// SMA 20 CALCULATION - FIXED VERSION FOR SCAN_RESULTS
+// =====================================================
+
+console.log('📊 === SMA 20 CALCULATION START ===');
+
+// Приемаме, че $input.all() връща масив от обекти, всеки с .json
+const allCandles = $input.all();
+console.log(`Received ${allCandles.length} candle records`);
+
+const currentScanCycleId = ($input.first().json.scan_cycle_id || 1); 
+console.log(`Using scan_cycle_id: ${currentScanCycleId}`);
+
+// =====================================================
+// ГРУПИРАЙ ПО СИМВОЛ
+// =====================================================
+const candlesBySymbol = new Map();
+
+allCandles.forEach(item => {
+    // Уверете се, че работите с .json обекта, ако е необходимо
+    const candle = item.json || item; // Приемаме .json или директния обект
+    const symbol = candle.symbol;
+    
+    // Проверка за основните полета
+  if (!symbol || !candle.close_price || !candle.open_time) {
+        console.log('⚠️ Skipping invalid candle:', candle);
+        return;
+    }
+    
+    if (!candlesBySymbol.has(symbol)) {
+        candlesBySymbol.set(symbol, []);
+    }
+    
+   candlesBySymbol.get(symbol).push({
+    close_price: parseFloat(candle.close_price),
+    open_time: candle.open_time
+});
+});
+
+console.log(`\nGrouped into ${candlesBySymbol.size} symbols`);
+
+// =====================================================
+// ИЗЧИСЛИ SMA 20 ЗА ВСЕКИ СИМВОЛ
+// =====================================================
+const smaResults = []; // Тук ще съхраняваме резултатите, готови за DB
+
+candlesBySymbol.forEach((candles, symbol) => {
+    // Сортирай по timestamp DESC (най-новите първи)
+   candles.sort((a, b) => b.open_time - a.open_time);
+    
+    // ВЗЕМИ САМО ПОСЛЕДНИТЕ 20 СВЕЩИ
+    const last20 = candles.slice(0, 20);
+    
+    if (last20.length < 20) {
+        console.log(`\n⚠️ ${symbol}: Only ${last20.length} candles available - SKIPPING SMA 20 calculation.`);
+        return; // Пропускаме, ако няма достатъчно данни
+    }
+    
+    console.log(`\n--- ${symbol} ---`);
+    console.log(`Candles available: ${candles.length}, using last 20 for SMA 20 calculation.`);
+    
+    // DEBUG: Покажи последните 5 цени
+    console.log('Last 5 close prices (used for SMA):');
+    last20.slice(0, 5).forEach((c, i) => {
+        console.log(`  ${i + 1}. ${c.close_price} at ${c.timestamp}`);
+    });
+    
+    // ИЗЧИСЛИ SMA 20 (КОРИГИРАН БЛОК)
+    const sum = last20
+        .reduce((accumulator, candle) => accumulator + candle.close_price, 0);
+    
+    const sma20 = sum / 20;
+
+    console.log(`SMA 20 calculated: ${sma20.toFixed(2)}`);
+
+    // Вземи последния (най-новия) close_price
+    const latestClosePrice = last20[0].close_price;
+
+    // Добави резултата към масива (за базата данни)
+    smaResults.push({
+        symbol: symbol,
+        sma_20: sma20,
+      scan_cycle_id: currentScanCycleId,
+       cycle_timestamp: new Date().toISOString(),
+    });
+}); // <--- Тази скоба ЗАТВАРЯ цикъла candlesBySymbol.forEach
+
+// =====================================================
+// ФИНАЛНИ СТЪПКИ И ВРЪЩАНЕ НА РЕЗУЛТАТА
+// =====================================================
+
+console.log('\n✅ === SMA 20 CALCULATION END ===');
+console.log(`\nResults prepared for DB: ${smaResults.length} records.`);
+
+// Връщане на масива с резултати към следващия n8n възел
+return smaResults;
