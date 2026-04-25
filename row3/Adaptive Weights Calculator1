@@ -1,0 +1,170 @@
+// =====================================================
+// BRANCH 2.2: ADAPTIVE WEIGHTS CALCULATOR v3.0
+// Динамично определя weights на база market condition
+// UPDATED: Option B - No R/R weight (pure 5-component)
+// OPTIMIZED: 15% Volume weight for crypto markets
+// =====================================================
+
+console.log('⚖️ === ADAPTIVE WEIGHTS CALCULATOR v3.0 START ===');
+
+const marketResults = $input.all();
+console.log(`Calculating adaptive weights for ${marketResults.length} symbols`);
+
+// =====================================================
+// WEIGHT CONFIGURATIONS - CRYPTO-OPTIMIZED
+// =====================================================
+// Based on professional crypto trading analysis:
+// - Volume increased to 15% (crypto's #1 confirmation)
+// - Volatility increased to 17% (embrace crypto volatility)
+// - Momentum increased to 21% (crypto is momentum-driven)
+// - Price Action reduced to 7% (supportive, not decisive)
+// - Trend remains 40% (always the king)
+// - NO R/R weight (handled as separate filter)
+// =====================================================
+
+const WEIGHT_CONFIGS = {
+  STRONG_TREND: {
+    momentum: 0.21,      // +1% from baseline (momentum edge in trends)
+    trend: 0.40,         // Unchanged (trend dominates)
+    volatility: 0.17,    // +2% from baseline (volatility = opportunity)
+    volume: 0.15,        // +5% from baseline (THE crypto differentiator)
+    price_action: 0.07   // -3% from baseline (supportive role)
+  },
+  NEUTRAL: {
+    momentum: 0.25,      // Increased (momentum matters more in neutral)
+    trend: 0.25,         // Baseline
+    volatility: 0.20,    // Balanced
+    volume: 0.20,        // CRITICAL (volume becomes decision-maker)
+    price_action: 0.10   // Standard
+  },
+  RANGING: {
+    momentum: 0.30,      // Highest (range breakouts are momentum plays)
+    trend: 0.10,         // Lowest (trends are weak)
+    volatility: 0.25,    // High (volatility spikes = breakout potential)
+    volume: 0.20,        // High (volume confirms breakout)
+    price_action: 0.15   // Elevated (structure matters in ranges)
+  },
+  UNKNOWN: {
+    // Default neutral weights (safety fallback)
+    momentum: 0.25,
+    trend: 0.25,
+    volatility: 0.20,
+    volume: 0.20,
+    price_action: 0.10
+  }
+};
+
+// =====================================================
+// VALIDATION: Verify all weight configs sum to 1.0
+// =====================================================
+console.log('\n🔍 Validating Weight Configurations:');
+
+Object.entries(WEIGHT_CONFIGS).forEach(([condition, weights]) => {
+  const sum = Object.values(weights).reduce((a, b) => a + b, 0);
+  const isValid = Math.abs(sum - 1.0) < 0.001; // Allow 0.1% rounding error
+  
+  console.log(`  ${condition}: ${(sum * 100).toFixed(1)}% ${isValid ? '✅' : '❌ INVALID'}`);
+  
+  if (!isValid) {
+    console.error(`  ❌ ERROR: ${condition} weights sum to ${sum.toFixed(4)}, not 1.0!`);
+  }
+});
+
+// =====================================================
+// WEIGHT ASSIGNMENT FUNCTION
+// =====================================================
+function getWeights(marketCondition) {
+  const weights = WEIGHT_CONFIGS[marketCondition] || WEIGHT_CONFIGS.UNKNOWN;
+  
+  // Final validation
+  const sum = Object.values(weights).reduce((a, b) => a + b, 0);
+  
+  if (Math.abs(sum - 1.0) > 0.001) {
+    console.warn(`⚠️ WARNING: ${marketCondition} weights sum to ${sum.toFixed(4)}, not 1.0`);
+  }
+  
+  return weights;
+}
+
+// =====================================================
+// PROCESS EACH SYMBOL
+// =====================================================
+const results = marketResults.map(item => {
+  const data = item.json;
+  const marketCondition = data.market_condition || 'UNKNOWN';
+  
+  const weights = getWeights(marketCondition);
+  
+  console.log(`${data.symbol}: ${marketCondition} → Volume=${(weights.volume * 100).toFixed(0)}%, Trend=${(weights.trend * 100).toFixed(0)}%`);
+  
+  return {
+    json: {
+      ...data, // ✅ Pass through all existing data
+      
+      // ═══════════════════════════════════════════════
+      // ADAPTIVE WEIGHTS (5 COMPONENTS - NO R/R)
+      // ═══════════════════════════════════════════════
+      weights: weights,
+      
+      // Individual weight fields (for easy access downstream)
+      weight_momentum: weights.momentum,
+      weight_trend: weights.trend,
+      weight_volatility: weights.volatility,
+      weight_volume: weights.volume,
+      weight_price_action: weights.price_action,
+      
+      // ═══════════════════════════════════════════════
+      // METADATA
+      // ═══════════════════════════════════════════════
+      weights_calculated_at: new Date().toISOString(),
+      weight_strategy: `${marketCondition}_CRYPTO_OPTIMIZED`,
+      weight_version: 'v3.0_OPTION_B_15PCT_VOLUME'
+    }
+  };
+});
+
+// =====================================================
+// SUMMARY STATISTICS
+// =====================================================
+console.log('\n⚖️ === WEIGHTS SUMMARY ===');
+
+const weightsByCondition = results.reduce((acc, r) => {
+  const condition = r.json.market_condition;
+  if (!acc[condition]) {
+    acc[condition] = {
+      count: 0,
+      avg_volume_weight: 0,
+      avg_trend_weight: 0,
+      avg_momentum_weight: 0
+    };
+  }
+  acc[condition].count++;
+  acc[condition].avg_volume_weight += r.json.weight_volume;
+  acc[condition].avg_trend_weight += r.json.weight_trend;
+  acc[condition].avg_momentum_weight += r.json.weight_momentum;
+  return acc;
+}, {});
+
+Object.keys(weightsByCondition).forEach(condition => {
+  const stats = weightsByCondition[condition];
+  const count = stats.count;
+  console.log(`\n${condition} (${count} symbols):`);
+  console.log(`  Volume Weight:   ${((stats.avg_volume_weight / count) * 100).toFixed(0)}% ← BOOSTED`);
+  console.log(`  Trend Weight:    ${((stats.avg_trend_weight / count) * 100).toFixed(0)}%`);
+  console.log(`  Momentum Weight: ${((stats.avg_momentum_weight / count) * 100).toFixed(0)}%`);
+});
+
+// Log weight distribution
+console.log('\n📊 Weight Distribution Summary:');
+console.log('STRONG_TREND scenario:');
+console.log(`  Momentum: 21% | Trend: 40% | Volatility: 17% | Volume: 15% ⬆️ | PA: 7%`);
+console.log('NEUTRAL scenario:');
+console.log(`  Momentum: 25% | Trend: 25% | Volatility: 20% | Volume: 20% ⬆️ | PA: 10%`);
+console.log('RANGING scenario:');
+console.log(`  Momentum: 30% | Trend: 10% | Volatility: 25% | Volume: 20% ⬆️ | PA: 15%`);
+
+console.log('\n✅ Branch 2 complete - Ready for MERGE');
+console.log('🚀 Volume weight optimized for crypto markets (15-20%)');
+console.log('⚠️ R/R removed from weights (handled as filter in step 5)');
+
+return results;
