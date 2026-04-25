@@ -1,0 +1,86 @@
+// =====================================================
+// MERGE SMA 20 WITH SYMBOL DATA - FIXED VERSION
+// =====================================================
+
+console.log('=== MERGE SMA WITH SYMBOLS START ===');
+
+// Get SMA results from previous node (plain objects)
+const smaResults = $input.all();
+console.log(`Received ${smaResults.length} SMA results`);
+
+// Create Map: symbol → sma_20 value
+const smaMap = new Map();
+
+smaResults.forEach((item, index) => {
+  const symbol = item.json ? item.json.symbol : item.symbol;
+  const sma20 = item.json ? item.json.sma_20 : item.sma_20;
+  
+  if (symbol && sma20 !== undefined && sma20 !== null) {
+    smaMap.set(symbol, sma20);
+    if (index < 3) {
+      console.log(`  ${symbol}: SMA 20 = ${sma20}`);
+    }
+  } else {
+    console.log(`  WARNING: Invalid SMA data at index ${index}:`, item);
+  }
+});
+
+console.log(`\nCreated SMA map with ${smaMap.size} entries`);
+
+// Get crypto symbols from earlier in workflow
+const NODE_SYMBOLS = 'Crypto Symbols Insert';
+const symbols = $(NODE_SYMBOLS).all();
+console.log(`Received ${symbols.length} symbol records from ${NODE_SYMBOLS}`);
+
+if (symbols.length === 0) {
+  console.error(`❌ CRITICAL: "${NODE_SYMBOLS}" returned 0 records. Node rename or upstream failure.`);
+  return [{
+    json: {
+      error: 'UPSTREAM_DATA_MISSING',
+      missing_source: NODE_SYMBOLS,
+      message: `Cross-row reference "${NODE_SYMBOLS}" returned empty. Check node name or upstream execution.`,
+      sma_count: smaResults.length,
+      cycle_timestamp: new Date().toISOString()
+    }
+  }];
+}
+
+// Merge SMA data with symbol data
+const mergedData = [];
+let foundCount = 0;
+let missingCount = 0;
+
+symbols.forEach((symbolItem, index) => {
+  const symbol = symbolItem.json.symbol;
+  const sma20 = smaMap.get(symbol);
+  
+  if (sma20 !== undefined) {
+    foundCount++;
+    if (index < 3) {
+      console.log(`  ✓ ${symbol}: Found SMA 20 = ${sma20}`);
+    }
+  } else {
+    missingCount++;
+    console.log(`  ✗ ${symbol}: SMA 20 NOT FOUND in map`);
+  }
+  
+  mergedData.push({
+    json: {
+      ...symbolItem.json,
+      sma_20: sma20 || null  // Use SMA value or null if not found
+    }
+  });
+});
+
+console.log(`\n=== MERGE SUMMARY ===`);
+console.log(`Total symbols processed: ${mergedData.length}`);
+console.log(`SMA values found: ${foundCount}`);
+console.log(`SMA values missing: ${missingCount}`);
+
+if (missingCount > 0) {
+  console.log(`\nDEBUG: Symbols in map:`, Array.from(smaMap.keys()).slice(0, 5));
+  console.log(`DEBUG: Symbols needing merge:`, symbols.slice(0, 5).map(s => s.json.symbol));
+}
+
+console.log(`\nReturning ${mergedData.length} merged records`);
+return mergedData;
