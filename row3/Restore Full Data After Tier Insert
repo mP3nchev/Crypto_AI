@@ -1,0 +1,245 @@
+// =====================================================
+// RESTORE FULL DATA AFTER SUPABASE INSERT
+// + CALCULATE MEDIAN VOLUME
+// + EXTRACT 1M PRICES ✅ NEW
+// =====================================================
+
+console.log('🔄 === RESTORE FULL DATA + MEDIAN VOLUME + 1M PRICES START ===');
+
+// =====================================================
+// STEP 1: Get Input Data
+// =====================================================
+
+// Get tier insert results (current input)
+const tierInsertResults = $input.all();
+console.log(`Received ${tierInsertResults.length} tier records from Supabase INSERT`);
+
+// Get FULL data from ATR Volatility Analyzer2 (before filtering)
+const NODE_ATR = 'ATR Volatility Analyzer2';
+const fullDataSource = $(NODE_ATR).all();
+console.log(`Retrieved ${fullDataSource.length} full records from ${NODE_ATR}`);
+
+if (fullDataSource.length === 0) {
+  console.error(`❌ CRITICAL: "${NODE_ATR}" returned 0 records. Node rename or upstream failure.`);
+  return [{
+    json: {
+      error: 'UPSTREAM_DATA_MISSING',
+      missing_source: NODE_ATR,
+      message: `Cross-row reference "${NODE_ATR}" returned empty. Check node name or upstream execution.`,
+      cycle_timestamp: new Date().toISOString()
+    }
+  }];
+}
+
+// Get 1m prices from BINANCE CANDLE PROCESSOR
+const NODE_CANDLES = 'BINANCE CANDLE PROCESSOR';
+const candleData = $(NODE_CANDLES).all();
+console.log(`Retrieved ${candleData.length} candle records from ${NODE_CANDLES}`);
+
+if (candleData.length === 0) {
+  console.error(`❌ CRITICAL: "${NODE_CANDLES}" returned 0 records. Node rename or upstream failure.`);
+  return [{
+    json: {
+      error: 'UPSTREAM_DATA_MISSING',
+      missing_source: NODE_CANDLES,
+      message: `Cross-row reference "${NODE_CANDLES}" returned empty. Check node name or upstream execution.`,
+      cycle_timestamp: new Date().toISOString()
+    }
+  }];
+}
+
+// =====================================================
+// STEP 2: Extract 1m Prices ✅ NEW
+// =====================================================
+
+console.log('\n🔍 === EXTRACTING 1M PRICES ===');
+
+const priceMap_1m = new Map();
+
+candleData.forEach(item => {
+  const data = item.json;
+  
+  // Find 1m candles
+  if (data.interval === '1m') {
+    const symbol = data.symbol;
+    const price = parseFloat(data.close_price || 0);
+    
+    // Store only if not already stored (take first = most recent)
+    if (price > 0 && !priceMap_1m.has(symbol)) {
+      priceMap_1m.set(symbol, price);
+      console.log(`  ✅ ${symbol}: latest_1m_price = ${price.toFixed(8)}`);
+    }
+  }
+});
+
+console.log(`✅ Extracted 1m prices for ${priceMap_1m.size} symbols`);
+
+// =====================================================
+// STEP 3: Extract Real Median Volumes from Candle Processor ✅ UPDATED
+// =====================================================
+
+console.log('\n📊 === EXTRACTING REAL MEDIAN VOLUMES ===');
+
+const medianVolumeMap_1h = new Map();
+const medianVolumeMap_2h = new Map();
+
+candleData.forEach(item => {
+  const data = item.json;
+  const symbol = data.symbol;
+  
+  // Extract median_volume_1h (already calculated in CANDLE PROCESSOR)
+  if (data.median_volume_1h && data.median_volume_1h > 0) {
+    if (!medianVolumeMap_1h.has(symbol)) {
+      medianVolumeMap_1h.set(symbol, parseFloat(data.median_volume_1h));
+    }
+  }
+  
+  // Extract median_volume_2h (for backward compatibility)
+  if (data.median_volume_2h && data.median_volume_2h > 0) {
+    if (!medianVolumeMap_2h.has(symbol)) {
+      medianVolumeMap_2h.set(symbol, parseFloat(data.median_volume_2h));
+    }
+  }
+});
+
+console.log(`✅ Extracted median_volume_1h for ${medianVolumeMap_1h.size} symbols`);
+console.log(`✅ Extracted median_volume_2h for ${medianVolumeMap_2h.size} symbols`);
+
+// ⚠️ Fallback: If no real medians found, use estimation
+if (medianVolumeMap_1h.size === 0 && medianVolumeMap_2h.size === 0) {
+  console.warn('\n⚠️ WARNING: No real medians found in CANDLE PROCESSOR output!');
+  console.warn('⚠️ Falling back to estimation formula...\n');
+  
+  fullDataSource.forEach(item => {
+    const data = item.json;
+    const symbol = data.symbol;
+    const cs_volume = parseFloat(data.cs_volume || 0);
+    
+    if (cs_volume > 0) {
+      // Fallback estimation
+      const estimatedMedian2h = (cs_volume / 12) * 0.8;
+      medianVolumeMap_2h.set(symbol, estimatedMedian2h);
+      
+      if (medianVolumeMap_2h.size <= 5) {
+        console.log(`  ${symbol}: median 2h ≈ ${estimatedMedian2h.toFixed(2)} (ESTIMATED)`);
+      }
+    }
+  });
+}
+
+console.log('\n');
+
+// =====================================================
+// STEP 4: MERGE - Full Data + Tier Info + Medians + 1m Price ✅ UPDATED
+// =====================================================
+
+const restoredData = tierInsertResults.map(tierItem => {
+  const tierData = tierItem.json;
+  const symbol = tierData.symbol;
+  
+  // Find matching full data
+  const matchingFull = fullDataSource.find(
+    fullItem => fullItem.json.symbol === symbol
+  );
+  
+  if (!matchingFull) {
+    console.warn(`⚠️ WARNING: No matching full data for ${symbol}`);
+    return tierItem; // Return tier data only
+  }
+  
+  const fullData = matchingFull.json;
+  
+  // Get median volumes
+  const median_1h = medianVolumeMap_1h.get(symbol) || 0;
+  const median_2h = medianVolumeMap_2h.get(symbol) || 0;
+  
+  // ✅ Get 1m price
+  const latest_1m = priceMap_1m.get(symbol);
+  
+  console.log(`✅ Restored: ${symbol}`);
+  console.log(`   - median_1h: ${median_1h.toFixed(2)}`);
+  console.log(`   - median_2h: ${median_2h.toFixed(2)}`);
+  console.log(`   - latest_1m_price: ${latest_1m ? latest_1m.toFixed(2) : 'N/A (using fallback)'}`);
+  
+  // =====================================================
+  // MERGE: Full data + Tier info + Medians + 1m price
+  // =====================================================
+  
+  return {
+    json: {
+      ...fullData,  // ✅ ALL original data (rsi, macd, adx, etc.)
+      
+      // ✅ UPDATE tier info with DB response
+      id: tierData.id,
+      tier: tierData.tier,
+      tier_name: tierData.tier_name,
+      rank_position: tierData.rank_position,
+      atr_threshold_low: tierData.atr_threshold_low,
+      atr_threshold_high: tierData.atr_threshold_high,
+      current_atr_1h: tierData.current_atr_1h,
+      atr_percentage_1h: tierData.atr_percentage_1h,
+      volatility_status: tierData.volatility_status,
+      volatility_score: tierData.volatility_score,
+      volatility_warning: tierData.volatility_warning,
+      risk_level: tierData.risk_level,
+      max_suggested_leverage: tierData.max_suggested_leverage,
+      
+      // ✅ ADD REAL MEDIAN VOLUMES
+      median_volume_1h: median_1h,        // ✅ NEW: Real 1h median
+      median_volume_2h: median_2h,        // ✅ UPDATED: Real 2h median (not estimation!)
+      
+      // ✅ ADD 1M PRICE
+      latest_1m_price: latest_1m || fullData.close_price || fullData.current_price,  // ✅ NEW with fallback
+      
+      // Metadata от DB
+      asset_tiers_saved: true,
+      asset_tiers_id: tierData.id,
+      asset_tiers_updated_at: tierData.updated_at,
+      data_restored_at: new Date().toISOString()
+    }
+  };
+});
+
+// =====================================================
+// STEP 5: VALIDATION ✅ UPDATED
+// =====================================================
+
+console.log(`\n📊 === RESTORE SUMMARY ===`);
+console.log(`Total restored: ${restoredData.length} records`);
+
+// Check if all have critical fields
+const sampleRecord = restoredData[0]?.json;
+if (sampleRecord) {
+  const criticalFields = ['rsi_2h', 'adx_2h', 'macd_value_2h', 'vwap_1h', 'close_price'];
+  const missingFields = criticalFields.filter(field => !sampleRecord[field]);
+  
+  if (missingFields.length > 0) {
+    console.error(`❌ WARNING: Missing critical fields: ${missingFields.join(', ')}`);
+  } else {
+    console.log(`✅ All critical TAAPI fields present`);
+  }
+  
+  console.log(`\n🔍 Sample restored record for ${sampleRecord.symbol}:`);
+  console.log(`  - rsi_2h: ${sampleRecord.rsi_2h}`);
+  console.log(`  - adx_2h: ${sampleRecord.adx_2h}`);
+  console.log(`  - tier: ${sampleRecord.tier}`);
+  console.log(`  - volatility_score: ${sampleRecord.volatility_score}`);
+  console.log(`  - median_volume_1h: ${sampleRecord.median_volume_1h}`);  // ✅ NEW
+  console.log(`  - median_volume_2h: ${sampleRecord.median_volume_2h}`);
+  console.log(`  - latest_1m_price: ${sampleRecord.latest_1m_price}`);    // ✅ NEW
+  console.log(`  - asset_tiers_id: ${sampleRecord.asset_tiers_id}`);
+}
+
+// Count statistics
+const withMedian1h = restoredData.filter(r => r.json.median_volume_1h > 0).length;
+const withMedian2h = restoredData.filter(r => r.json.median_volume_2h > 0).length;
+const with1mPrice = restoredData.filter(r => r.json.latest_1m_price > 0).length;
+
+console.log(`\n📊 Data Quality:`);
+console.log(`  - Records with median_volume_1h: ${withMedian1h}/${restoredData.length}`);  // ✅ NEW
+console.log(`  - Records with median_volume_2h: ${withMedian2h}/${restoredData.length}`);
+console.log(`  - Records with latest_1m_price: ${with1mPrice}/${restoredData.length}`);    // ✅ NEW
+
+console.log('\n✅ Full data restored - ready for scoring branches\n');
+
+return restoredData;
