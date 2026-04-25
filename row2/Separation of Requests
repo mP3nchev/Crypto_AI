@@ -1,0 +1,212 @@
+// Филтрирай INCOMPLETE символи преди TAAPI
+const validItems = $input.all().filter(item => !item.json.exclude_from_taapi);
+// ... останалата логика работи с validItems вместо с $input.all()
+
+// =====================================================
+// TAAPI SECRET KEY
+// =====================================================
+const SECRET_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJjbHVlIjoiNjkwNTBkYTc4MDZmZjE2NTFlOTkxMTcyIiwiaWF0IjoxNzYyMjk1OTA1LCJleHAiOjMzMjY2NzU5OTA1fQ.tHWRacYMS_u6rph2SEmaOO223CFGc8suA9kzcBy3eGM"; 
+
+// =====================================================
+// INPUT VALIDATION
+// =====================================================
+const inputItems = $input.all();
+
+console.log('=== SEPARATION OF REQUESTS START ===');
+console.log(`Input items received: ${inputItems ? inputItems.length : 0}`);
+
+if (!inputItems || inputItems.length === 0) {
+  console.error('CRITICAL ERROR: No input items received from previous node');
+  console.error('Check that "Merge SMA with Symbols" is outputting data correctly');
+  return [{
+    json: {
+      error: 'No input items',
+      message: 'Previous node returned empty data',
+      timestamp: new Date().toISOString()
+    }
+  }];
+}
+
+// Log first item structure for debugging
+console.log('\nFirst item structure:');
+console.log(JSON.stringify(inputItems[0], null, 2));
+
+// =====================================================
+// CYCLE TRACKING
+// =====================================================
+const now = new Date();
+const cycle_timestamp = now.toISOString();
+const year = now.getFullYear();
+const month = String(now.getMonth() + 1).padStart(2, '0');
+const day = String(now.getDate()).padStart(2, '0');
+const hour = String(now.getHours()).padStart(2, '0');
+const minute = String(now.getMinutes()).padStart(2, '0');
+const scan_cycle_id = `${year}-${month}-${day}_${hour}:${minute}`;
+
+console.log(`\nCycle ID: ${scan_cycle_id}`);
+console.log(`Cycle timestamp: ${cycle_timestamp}`);
+
+let allRequests = [];
+let processedCount = 0;
+let skippedCount = 0;
+
+// =====================================================
+// PROCESSING SYMBOLS
+// =====================================================
+for (let i = 0; i < inputItems.length; i++) {
+  const item = inputItems[i];
+  
+  // Validate item structure
+  if (!item || !item.json) {
+    console.error(`Item ${i}: Invalid structure - missing .json property`);
+    skippedCount++;
+    continue;
+  }
+  
+  const data = item.json;
+  
+  // Extract required fields with validation
+  const symbol = data.symbol;
+  const symbol_id = data.symbol_id || data.id;
+  
+  if (!symbol) {
+    console.error(`Item ${i}: Missing symbol field`);
+    skippedCount++;
+    continue;
+  }
+  
+  if (!symbol_id) {
+    console.error(`Item ${i} (${symbol}): Missing symbol_id field`);
+    skippedCount++;
+    continue;
+  }
+  
+  // Extract SMA 20 (already merged from previous node)
+  const sma_20 = data.sma_20;
+  
+  // Store complete original data for preservation
+  const original_scan_data = { ...data };
+  
+  console.log(`\nProcessing ${i + 1}/${inputItems.length}: ${symbol}`);
+  console.log(`  Symbol ID: ${symbol_id}`);
+  console.log(`  SMA 20: ${sma_20 !== null && sma_20 !== undefined ? sma_20 : 'NOT FOUND'}`);
+  console.log(`  Original data fields: ${Object.keys(data).join(', ')}`);
+  
+  // Convert symbol for TAAPI format
+  const symbolTaapi = symbol.replace(/USDT$/, '/USDT');
+  
+  // =====================================================
+  // TAAPI CONSTRUCT - 20 INDICATORS (3 TIMEFRAMES)
+  // =====================================================
+  const constructA = [
+    // 2h TIMEFRAME - 9 INDICATORS
+    {
+      exchange: "binance", 
+      symbol: symbolTaapi, 
+      interval: "2h", 
+      backtrack: 1, 
+      indicators: [
+        { id: `${symbol}_rsi_2h`, indicator: "rsi", optInTimePeriod: 14 },
+        { id: `${symbol}_macd_2h`, indicator: "macd", optInTimePeriod: 14, optInFastKPeriod: 3, optInFastDPeriod: 3 },
+        { id: `${symbol}_adx_2h`, indicator: "adx", optInTimePeriod: 14 },
+        { id: `${symbol}_ema200_2h`, indicator: "ema", optInTimePeriod: 200 },
+        { id: `${symbol}_stochrsi_2h`, indicator: "stochrsi", optInTimePeriod: 14, optInFastKPeriod: 3, optInFastDPeriod: 3 },
+        { id: `${symbol}_willr_2h`, indicator: "willr", optInTimePeriod: 14 },
+        { id: `${symbol}_mfi_2h`, indicator: "mfi", optInTimePeriod: 14 },
+        { id: `${symbol}_ema20_2h`, indicator: "ema", optInTimePeriod: 20 },
+        { id: `${symbol}_ema50_2h`, indicator: "ema", optInTimePeriod: 50 }
+      ]
+    },
+    
+    // 1h TIMEFRAME - 9 INDICATORS
+    {
+      exchange: "binance", 
+      symbol: symbolTaapi, 
+      interval: "1h", 
+      backtrack: 1, 
+      indicators: [
+        { id: `${symbol}_rsi_1h`, indicator: "rsi", optInTimePeriod: 14 },
+        { id: `${symbol}_macd_1h`, indicator: "macd" },
+        { id: `${symbol}_vwap_1h`, indicator: "vwap" },
+        { id: `${symbol}_obv_1h`, indicator: "obv" },
+        { id: `${symbol}_atr_1h`, indicator: "atr", optInTimePeriod: 14 },
+        { id: `${symbol}_bbw_1h`, indicator: "bbw" },
+        { id: `${symbol}_ema20_1h`, indicator: "ema", optInTimePeriod: 20 },
+        { id: `${symbol}_ema50_1h`, indicator: "ema", optInTimePeriod: 50 },
+        { id: `${symbol}_stochrsi_1h`, indicator: "stochrsi" }
+      ]
+    },
+    
+    // 15m TIMEFRAME - 2 INDICATORS
+    {
+      exchange: "binance", 
+      symbol: symbolTaapi, 
+      interval: "15m", 
+      backtrack: 1, 
+      indicators: [
+        { id: `${symbol}_willr_15m`, indicator: "willr" },
+        { id: `${symbol}_rsi_15m`, indicator: "rsi", optInTimePeriod: 14 }
+      ]
+    }
+  ];
+
+  // =====================================================
+  // BUILD REQUEST PAYLOAD
+  // =====================================================
+  allRequests.push({
+    json: {
+      // TAAPI API fields
+      secret: SECRET_KEY,
+      construct: constructA,
+      
+      // Symbol identification
+      symbol: symbol,
+      symbol_id: symbol_id,
+      
+      // Cycle tracking
+      cycle_timestamp: cycle_timestamp,
+      scan_cycle_id: scan_cycle_id,
+      request_type: 'A',
+      
+      // PRESERVED DATA - Critical for downstream nodes
+      sma_20: sma_20,
+      original_scan_data: original_scan_data
+    }
+  });
+  
+  processedCount++;
+  console.log(`  Status: CREATED (includes SMA: ${sma_20 !== null && sma_20 !== undefined ? 'YES' : 'NO'})`);
+}
+
+// =====================================================
+// SUMMARY & VALIDATION
+// =====================================================
+console.log('\n=== PROCESSING COMPLETE ===');
+console.log(`Successfully processed: ${processedCount}`);
+console.log(`Skipped (invalid): ${skippedCount}`);
+console.log(`Total requests created: ${allRequests.length}`);
+console.log(`Indicators per request: 20 (2h:9 + 1h:9 + 15m:2)`);
+
+// Verify SMA data preservation
+const requestsWithSMA = allRequests.filter(r => r.json.sma_20 !== null && r.json.sma_20 !== undefined).length;
+console.log(`Requests with SMA 20: ${requestsWithSMA}/${allRequests.length}`);
+
+if (requestsWithSMA === 0) {
+  console.warn('WARNING: No SMA 20 data found in any requests');
+  console.warn('Check that "Merge SMA with Symbols" node is providing sma_20 field');
+}
+
+if (allRequests.length === 0) {
+  console.error('CRITICAL: No valid requests created');
+  return [{
+    json: {
+      error: 'No valid symbols processed',
+      processed: processedCount,
+      skipped: skippedCount,
+      timestamp: new Date().toISOString()
+    }
+  }];
+}
+
+console.log('\nReady for TAAPI batch processing');
+return allRequests;
