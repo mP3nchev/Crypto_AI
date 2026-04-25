@@ -1,0 +1,329 @@
+// =====================================================
+// NODE 8: ENTRY ZONE VALIDATOR v2.0
+// =====================================================
+// Получава от Technical Level Identifier:
+// - entry_min, entry_max (calculated zones)
+// - stop_loss, take_profit (from TP/SL Calculator)
+// - current_price, signal_direction
+//
+// Валидира:
+// - Entry zone width (<= 1.5% spread)
+// - SL clearance (>= 0.1% from entry)
+// - TP clearance (>= 0.5% from entry)
+// - Logical consistency (LONG: entry < TP, SHORT: entry > TP)
+//
+// ВАЖНО: Това е validation node, не filter
+// Маркира is_valid_entry, но не disqualify-ва
+// =====================================================
+
+console.log('🔍 ═══════════════════════════════════════════════');
+console.log('   ENTRY ZONE VALIDATOR v2.0');
+console.log('═══════════════════════════════════════════════');
+
+const inputData = $input.all();
+console.log(`📊 Validating entry zones for ${inputData.length} signals`);
+
+if (inputData.length === 0) {
+  console.log('⚠️ No input data received');
+  return [];
+}
+
+// =====================================================
+// VALIDATION CONFIGURATION
+// =====================================================
+const VALIDATION_RULES = {
+  MAX_ENTRY_RANGE_PCT: 1.5,   // Max spread between entry_min and entry_max
+  MIN_SL_DISTANCE_PCT: 0.1,   // Min distance from entry to SL
+  MIN_TP_CLEARANCE_PCT: 0.5   // Min distance from entry to TP
+};
+
+// =====================================================
+// ENTRY ZONE VALIDATION FUNCTION
+// =====================================================
+function validateEntryZone(data) {
+  const currentPrice = parseFloat(data.current_price || data.close_price || 0);
+  const entryMin = parseFloat(data.entry_min || 0);
+  const entryMax = parseFloat(data.entry_max || 0);
+  const stopLoss = parseFloat(data.stop_loss || 0);
+  const takeProfit = parseFloat(data.take_profit || 0);
+  const signalDirection = (data.signal_direction || '').toUpperCase();
+  
+  console.log(`  Current Price: ${currentPrice.toFixed(8)}`);
+  console.log(`  Entry Zone: ${entryMin.toFixed(8)} - ${entryMax.toFixed(8)}`);
+  console.log(`  Stop Loss: ${stopLoss.toFixed(8)}`);
+  console.log(`  Take Profit: ${takeProfit.toFixed(8)}`);
+  console.log(`  Direction: ${signalDirection}`);
+  
+  const validationResults = {
+    is_valid: true,
+    validation_errors: [],
+    validation_warnings: []
+  };
+  
+  // =====================================================
+  // VALIDATION 1: Missing Data Check
+  // =====================================================
+  if (!currentPrice || !entryMin || !entryMax || !stopLoss || !takeProfit) {
+    console.log(`  ❌ VALIDATION FAILED: Missing required data`);
+    validationResults.is_valid = false;
+    validationResults.validation_errors.push('MISSING_REQUIRED_DATA');
+    return {
+      is_valid_entry: false,
+      validation_status: 'FAILED',
+      validation_errors: validationResults.validation_errors,
+      rejection_reason: 'Missing entry zone or TP/SL data'
+    };
+  }
+  
+  // =====================================================
+  // VALIDATION 2: Entry Zone Width Check
+  // =====================================================
+  const entryRangePct = Math.abs((entryMax - entryMin) / currentPrice) * 100;
+  console.log(`\n  📏 Entry Zone Width: ${entryRangePct.toFixed(2)}% (Max: ${VALIDATION_RULES.MAX_ENTRY_RANGE_PCT}%)`);
+  
+  if (entryRangePct > VALIDATION_RULES.MAX_ENTRY_RANGE_PCT) {
+    console.log(`  ❌ FAILED: Entry zone too wide`);
+    validationResults.is_valid = false;
+    validationResults.validation_errors.push(`ENTRY_ZONE_TOO_WIDE (${entryRangePct.toFixed(2)}% > ${VALIDATION_RULES.MAX_ENTRY_RANGE_PCT}%)`);
+  } else {
+    console.log(`  ✅ PASSED: Entry zone width acceptable`);
+  }
+  
+  // =====================================================
+  // VALIDATION 3: Stop Loss Clearance (Direction-Specific)
+  // =====================================================
+  let slDistancePct;
+  
+  if (signalDirection === 'LONG') {
+    // LONG: SL should be BELOW entry_min
+    slDistancePct = ((entryMin - stopLoss) / entryMin) * 100;
+    console.log(`\n  🛡️ SL Distance (LONG): ${slDistancePct.toFixed(2)}% below entry (Min: ${VALIDATION_RULES.MIN_SL_DISTANCE_PCT}%)`);
+    
+    if (stopLoss >= entryMin) {
+      console.log(`  ❌ FAILED: SL above entry (illogical for LONG)`);
+      validationResults.is_valid = false;
+      validationResults.validation_errors.push('SL_ABOVE_ENTRY_FOR_LONG');
+    } else if (slDistancePct < VALIDATION_RULES.MIN_SL_DISTANCE_PCT) {
+      console.log(`  ⚠️ WARNING: SL too close to entry`);
+      validationResults.validation_warnings.push(`SL_TOO_CLOSE (${slDistancePct.toFixed(2)}%)`);
+    } else {
+      console.log(`  ✅ PASSED: SL clearance adequate`);
+    }
+    
+  } else if (signalDirection === 'SHORT') {
+    // SHORT: SL should be ABOVE entry_max
+    slDistancePct = ((stopLoss - entryMax) / entryMax) * 100;
+    console.log(`\n  🛡️ SL Distance (SHORT): ${slDistancePct.toFixed(2)}% above entry (Min: ${VALIDATION_RULES.MIN_SL_DISTANCE_PCT}%)`);
+    
+    if (stopLoss <= entryMax) {
+      console.log(`  ❌ FAILED: SL below entry (illogical for SHORT)`);
+      validationResults.is_valid = false;
+      validationResults.validation_errors.push('SL_BELOW_ENTRY_FOR_SHORT');
+    } else if (slDistancePct < VALIDATION_RULES.MIN_SL_DISTANCE_PCT) {
+      console.log(`  ⚠️ WARNING: SL too close to entry`);
+      validationResults.validation_warnings.push(`SL_TOO_CLOSE (${slDistancePct.toFixed(2)}%)`);
+    } else {
+      console.log(`  ✅ PASSED: SL clearance adequate`);
+    }
+  }
+  
+  // =====================================================
+  // VALIDATION 4: Take Profit Clearance (Direction-Specific)
+  // =====================================================
+  let tpDistancePct;
+  
+  if (signalDirection === 'LONG') {
+    // LONG: TP should be ABOVE entry_max
+    tpDistancePct = ((takeProfit - entryMax) / entryMax) * 100;
+    console.log(`\n  🎯 TP Distance (LONG): ${tpDistancePct.toFixed(2)}% above entry (Min: ${VALIDATION_RULES.MIN_TP_CLEARANCE_PCT}%)`);
+    
+    if (takeProfit <= entryMax) {
+      console.log(`  ❌ FAILED: TP below entry (illogical for LONG)`);
+      validationResults.is_valid = false;
+      validationResults.validation_errors.push('TP_BELOW_ENTRY_FOR_LONG');
+    } else if (tpDistancePct < VALIDATION_RULES.MIN_TP_CLEARANCE_PCT) {
+      console.log(`  ⚠️ WARNING: TP too close to entry`);
+      validationResults.validation_warnings.push(`TP_TOO_CLOSE (${tpDistancePct.toFixed(2)}%)`);
+    } else {
+      console.log(`  ✅ PASSED: TP clearance adequate`);
+    }
+    
+  } else if (signalDirection === 'SHORT') {
+    // SHORT: TP should be BELOW entry_min
+    tpDistancePct = ((entryMin - takeProfit) / entryMin) * 100;
+    console.log(`\n  🎯 TP Distance (SHORT): ${tpDistancePct.toFixed(2)}% below entry (Min: ${VALIDATION_RULES.MIN_TP_CLEARANCE_PCT}%)`);
+    
+    if (takeProfit >= entryMin) {
+      console.log(`  ❌ FAILED: TP above entry (illogical for SHORT)`);
+      validationResults.is_valid = false;
+      validationResults.validation_errors.push('TP_ABOVE_ENTRY_FOR_SHORT');
+    } else if (tpDistancePct < VALIDATION_RULES.MIN_TP_CLEARANCE_PCT) {
+      console.log(`  ���️ WARNING: TP too close to entry`);
+      validationResults.validation_warnings.push(`TP_TOO_CLOSE (${tpDistancePct.toFixed(2)}%)`);
+    } else {
+      console.log(`  ✅ PASSED: TP clearance adequate`);
+    }
+  }
+  
+  // =====================================================
+  // FINAL VALIDATION STATUS
+  // =====================================================
+  const validationStatus = validationResults.is_valid ? 'PASSED' : 'FAILED';
+  const rejectionReason = validationResults.is_valid ? null : validationResults.validation_errors.join('; ');
+  
+  console.log(`\n  🎯 Validation Result: ${validationStatus}`);
+  if (validationResults.validation_errors.length > 0) {
+    console.log(`  ❌ Errors: ${validationResults.validation_errors.join(', ')}`);
+  }
+  if (validationResults.validation_warnings.length > 0) {
+    console.log(`  ⚠️ Warnings: ${validationResults.validation_warnings.join(', ')}`);
+  }
+  
+  return {
+    is_valid_entry: validationResults.is_valid,
+    validation_status: validationStatus,
+    validation_errors: validationResults.validation_errors,
+    validation_warnings: validationResults.validation_warnings,
+    rejection_reason: rejectionReason,
+    validation_metrics: {
+      entry_range_pct: parseFloat(entryRangePct.toFixed(2)),
+      sl_distance_pct: parseFloat((slDistancePct || 0).toFixed(2)),
+      tp_distance_pct: parseFloat((tpDistancePct || 0).toFixed(2))
+    }
+  };
+}
+
+// =====================================================
+// PROCESS EACH SYMBOL
+// =====================================================
+const results = inputData.map((item, index) => {
+  const data = item.json;
+  
+  console.log(`\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━`);
+  console.log(`📋 Symbol ${index + 1}/${inputData.length}: ${data.symbol}`);
+  console.log(`━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━`);
+  
+  // Validate entry zone
+  const validation = validateEntryZone(data);
+  
+  return {
+    json: {
+      // ═══════════════════════════════════════════════
+      // PASS-THROUGH ALL EXISTING DATA
+      // ═══════════════════════════════════════════════
+      ...data,
+      
+      // ═══════════════════════════════════════════════
+      // VALIDATION RESULTS (for Hard Filters Enforcer)
+      // ═══════════════════════════════════════════════
+      is_valid_entry: validation.is_valid_entry,
+      validation_status: validation.validation_status,
+      
+      // ═══════════════════════════════════════════════
+      // VALIDATION DETAILS
+      // ═══════════════════════════════════════════════
+      validation_errors: validation.validation_errors,
+      validation_warnings: validation.validation_warnings,
+      validation_metrics: validation.validation_metrics,
+      entry_rejection_reason: validation.rejection_reason,
+      
+      // ═══════════════════════════════════════════════
+      // TIMESTAMPS
+      // ═══════════════════════════════════════════════
+      entry_validated_at: new Date().toISOString()
+    }
+  };
+});
+
+// =====================================================
+// SUMMARY STATISTICS
+// =====================================================
+console.log(`\n\n╔════════════════════════════════════════════════════╗`);
+console.log(`║     ENTRY ZONE VALIDATION SUMMARY                  ║`);
+console.log(`╚════════════════════════════════════════════════════╝`);
+console.log(`📊 Total Signals Validated: ${results.length}`);
+
+const validEntries = results.filter(r => r.json.is_valid_entry).length;
+const invalidEntries = results.filter(r => !r.json.is_valid_entry).length;
+
+console.log(`✅ Valid Entry Zones: ${validEntries}`);
+console.log(`❌ Invalid Entry Zones: ${invalidEntries}`);
+console.log(`📈 Validation Pass Rate: ${((validEntries / results.length) * 100).toFixed(1)}%`);
+
+if (invalidEntries > 0) {
+  console.log(`\n🚫 Validation Failure Breakdown:`);
+  const errorCounts = {};
+  
+  results.forEach(r => {
+    if (!r.json.is_valid_entry && r.json.validation_errors) {
+      r.json.validation_errors.forEach(error => {
+        errorCounts[error] = (errorCounts[error] || 0) + 1;
+      });
+    }
+  });
+  
+  Object.entries(errorCounts)
+    .sort((a, b) => b[1] - a[1])
+    .forEach(([error, count]) => {
+      console.log(`  ${error}: ${count} signals`);
+    });
+  
+  console.log(`\n📋 Invalid Entry Zones (first 5):`);
+  results
+    .filter(r => !r.json.is_valid_entry)
+    .slice(0, 5)
+    .forEach((r, i) => {
+      console.log(`  ${i + 1}. ${r.json.symbol}: ${r.json.entry_rejection_reason}`);
+    });
+}
+
+// Warnings summary
+const warningsCount = results.filter(r => r.json.validation_warnings && r.json.validation_warnings.length > 0).length;
+if (warningsCount > 0) {
+  console.log(`\n⚠️ Signals with Warnings: ${warningsCount}`);
+  
+  const warningCounts = {};
+  results.forEach(r => {
+    if (r.json.validation_warnings) {
+      r.json.validation_warnings.forEach(warning => {
+        warningCounts[warning] = (warningCounts[warning] || 0) + 1;
+      });
+    }
+  });
+  
+  console.log(`\n⚠️ Warning Breakdown:`);
+  Object.entries(warningCounts)
+    .sort((a, b) => b[1] - a[1])
+    .forEach(([warning, count]) => {
+      console.log(`  ${warning}: ${count} signals`);
+    });
+}
+
+// Average validation metrics
+if (validEntries > 0) {
+  const avgEntryRange = results
+    .filter(r => r.json.is_valid_entry)
+    .reduce((sum, r) => sum + (r.json.validation_metrics?.entry_range_pct || 0), 0) / validEntries;
+  
+  const avgSLDistance = results
+    .filter(r => r.json.is_valid_entry)
+    .reduce((sum, r) => sum + (r.json.validation_metrics?.sl_distance_pct || 0), 0) / validEntries;
+  
+  const avgTPDistance = results
+    .filter(r => r.json.is_valid_entry)
+    .reduce((sum, r) => sum + (r.json.validation_metrics?.tp_distance_pct || 0), 0) / validEntries;
+  
+  console.log(`\n📊 Average Metrics (Valid Entries):`);
+  console.log(`  Entry Zone Width: ${avgEntryRange.toFixed(2)}%`);
+  console.log(`  SL Distance: ${avgSLDistance.toFixed(2)}%`);
+  console.log(`  TP Distance: ${avgTPDistance.toFixed(2)}%`);
+}
+
+console.log(`\n✅ Entry Zone Validation Complete`);
+console.log(`📤 Passing ${results.length} signals to Hard Filters Enforcer`);
+console.log(`\n💡 Note: Invalid entries will be filtered out in next stage`);
+
+// =====================================================
+// RETURN ALL SIGNALS (filtering happens in Hard Filters)
+// =====================================================
+return results;
