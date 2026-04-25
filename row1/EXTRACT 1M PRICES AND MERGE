@@ -1,0 +1,56 @@
+// =====================================================
+// EXTRACT 1M PRICES AND MERGE
+// =====================================================
+// This node extracts 1m prices from processed candles
+// and merges them into the main data flow
+// =====================================================
+
+console.log('🔍 === EXTRACTING 1M PRICES ===');
+
+// Get processed candles from CANDLE PROCESSOR
+const processedCandles = $input.all();
+
+// Build map: symbol → latest_1m_price
+const priceMap_1m = new Map();
+
+processedCandles.forEach(item => {
+  const data = item.json;
+  
+  // Find 1m candles
+  if (data.interval === '1m') {
+    const symbol = data.symbol;
+    const price = parseFloat(data.close_price || 0);
+    
+    // Store only if not already stored (take first = most recent)
+    if (!priceMap_1m.has(symbol) && price > 0) {
+      priceMap_1m.set(symbol, price);
+      console.log(`  ✅ ${symbol}: latest_1m_price = ${price.toFixed(8)}`);
+    }
+  }
+});
+
+console.log(`\n📊 Extracted 1m prices for ${priceMap_1m.size} symbols`);
+
+// =====================================================
+// STORE IN $node FOR LATER USE
+// =====================================================
+// This makes prices available to downstream nodes
+
+// Pass through all candles but mark which node this is
+const output = processedCandles.map(item => {
+  const data = item.json;
+  const symbol = data.symbol;
+  const latest_1m = priceMap_1m.get(symbol);
+  
+  return {
+    json: {
+      ...data,
+      // Attach 1m price if available
+      latest_1m_price: latest_1m || null
+    }
+  };
+});
+
+console.log(`✅ Attached 1m prices to ${output.length} records`);
+
+return output;
