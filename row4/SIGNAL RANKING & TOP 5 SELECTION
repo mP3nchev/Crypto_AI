@@ -1,0 +1,287 @@
+// =====================================================
+// NODE 10: SIGNAL RANKING & TOP 5 SELECTION v2.0
+// =====================================================
+// Получава от Hard Filters Enforcer:
+// - Само VALID signals (passed all filters)
+//
+// Прилага финални филтри:
+// 1. Sort by total_score (descending)
+// 2. Tier Diversification (max 2 from Tier 3, max 3 from Tier 2)
+// 3. Select Top 5
+//
+// ВАЖНО: Това е финалният node преди Telegram
+// =====================================================
+
+console.log('🏆 ═══════════════════════════════════════════════');
+console.log('   SIGNAL RANKING & TOP 5 SELECTION v2.0');
+console.log('═══════════════════════════════════════════════');
+
+const allSignals = $input.all();
+console.log(`📊 Ranking ${allSignals.length} validated signals`);
+
+/// Handle edge case: error object from previous node
+if (allSignals.length === 1 && allSignals[0].json.error) {
+  const errorDetail = allSignals[0].json.error;
+  const rejectedCount = allSignals[0].json.rejected_count || 0;
+  
+  console.log(`⚠️ No valid signals from previous node. Reason: ${errorDetail}`);
+  console.log(`🔕 Suppressing error — returning user-friendly no-signal notification`);
+  
+  return [{
+    json: {
+      // ════════════════════════════════════════
+      // TELEGRAM-READY "NO SIGNAL" NOTIFICATION
+      // ════════════════════════════════════════
+      telegram_message_type: 'NO_SIGNALS',
+      
+      // Полето което HTTP Request node ще прати към Telegram Bot API
+      telegram_text: `📊 *Scan Complete*\n\n` +
+        `🔍 No trading signals met quality filters this cycle.\n\n` +
+        `_${rejectedCount > 0 ? `${rejectedCount} candidate(s) analyzed — none passed all filters.` : 'No candidates in this scan cycle.'}_\n\n` +
+        `⏳ Next scan running shortly.`,
+      
+      // ════════════════════════════════════════
+      // INTERNAL METADATA (не влиза в Telegram)
+      // ════════════════════════════════════════
+      internal_error_suppressed: true,
+      original_error: errorDetail,
+      rejected_count: rejectedCount,
+      filter_version: allSignals[0].json.filter_version || 'unknown',
+      no_signal_at: new Date().toISOString(),
+      
+      // ════════════════════════════════════════
+      // FLAGS за HTTP Request node
+      // ════════════════════════════════════════
+      selected_for_telegram: false,
+      is_no_signal_notification: true
+    }
+  }];
+}
+
+// =====================================================
+// CONFIGURATION
+// =====================================================
+const CONFIG = {
+  MAX_SIGNALS: 5,           // Top 5 signals only
+  TIER_LIMITS: {
+    1: Infinity,            // No limit for Tier 1 (BTC, ETH)
+    2: 3,                   // Max 3 from Tier 2 (mid-caps)
+    3: 2                    // Max 2 from Tier 3 (altcoins - highest risk)
+  }
+};
+
+console.log(`\n📋 Selection Configuration:`);
+console.log(`  Max Signals: ${CONFIG.MAX_SIGNALS}`);
+console.log(`  Tier Limits:`);
+console.log(`    Tier 1: Unlimited`);
+console.log(`    Tier 2: Max ${CONFIG.TIER_LIMITS[2]} signals`);
+console.log(`    Tier 3: Max ${CONFIG.TIER_LIMITS[3]} signals`);
+
+// =====================================================
+// STEP 1: SORT BY TOTAL SCORE (DESCENDING)
+// =====================================================
+console.log(`\n📊 STEP 1: Sorting by Total Score`);
+
+const sortedSignals = allSignals.sort((a, b) => 
+  parseFloat(b.json.total_score || 0) - parseFloat(a.json.total_score || 0)
+);
+
+console.log(`  Sorted ${sortedSignals.length} signals by score (highest first)`);
+
+if (sortedSignals.length > 0) {
+  console.log(`\n  🥇 Top 3 Scores:`);
+  sortedSignals.slice(0, 3).forEach((sig, i) => {
+    console.log(`    ${i + 1}. ${sig.json.symbol}: ${sig.json.total_score.toFixed(2)}/100 (Tier ${sig.json.tier})`);
+  });
+}
+
+// =====================================================
+// STEP 2: TIER DIVERSIFICATION FILTER
+// =====================================================
+console.log(`\n\n🧬 STEP 2: Tier Diversification Filter`);
+
+const tierCounts = { 1: 0, 2: 0, 3: 0 };
+const selectedSignals = [];
+const skippedSignals = [];
+
+sortedSignals.forEach((signal, index) => {
+  const data = signal.json;
+  const symbol = data.symbol;
+  const tier = parseInt(data.tier || 2);
+  const totalScore = parseFloat(data.total_score || 0);
+  
+  console.log(`\n  --- Candidate ${index + 1}: ${symbol} (Tier ${tier}, Score: ${totalScore.toFixed(2)}) ---`);
+  
+  // Check if we already have max signals
+  if (selectedSignals.length >= CONFIG.MAX_SIGNALS) {
+    console.log(`    ⏹️ STOPPED: Already have ${CONFIG.MAX_SIGNALS} signals`);
+    skippedSignals.push({
+      json: {
+        ...data,
+        skip_reason: `Max signals limit reached (${CONFIG.MAX_SIGNALS})`,
+        skipped_at: new Date().toISOString()
+      }
+    });
+    return; // Stop processing
+  }
+  
+  // Check tier limit
+  const currentTierCount = tierCounts[tier];
+  const tierLimit = CONFIG.TIER_LIMITS[tier];
+  
+  console.log(`    Current Tier ${tier} count: ${currentTierCount}/${tierLimit === Infinity ? '∞' : tierLimit}`);
+  
+  if (currentTierCount < tierLimit) {
+    // ✅ ACCEPTED - Tier limit not exceeded
+    tierCounts[tier]++;
+    
+    console.log(`    ✅ SELECTED - Tier ${tier} count now: ${tierCounts[tier]}`);
+    console.log(`    Position in final ranking: #${selectedSignals.length + 1}`);
+    
+    selectedSignals.push({
+      json: {
+        // ═══════════════════════════════════════════════
+        // PASS-THROUGH ALL DATA
+        // ═══════════════════════════════════════════════
+        ...data,
+        
+        // ═══════════════════════════════════════════════
+        // RANKING METADATA
+        // ═══════════════════════════════════════════════
+        final_rank: selectedSignals.length + 1,
+        tier_count_at_selection: tierCounts[tier],
+        tier_limit: tierLimit === Infinity ? 'unlimited' : tierLimit,
+        
+        // ═══════════════════════════════════════════════
+        // SELECTION FLAGS
+        // ═══════════════════════════════════════════════
+        tier_diversification_passed: true,
+        selected_for_telegram: true,
+        
+        // ═══════════════════════════════════════════════
+        // TIMESTAMPS
+        // ═══════════════════════════════════════════════
+        ranked_at: new Date().toISOString(),
+        ready_for_telegram: true
+      }
+    });
+    
+  } else {
+    // ❌ SKIPPED - Tier limit exceeded
+    console.log(`    ❌ SKIPPED - Tier ${tier} limit (${tierLimit}) already reached`);
+    
+    skippedSignals.push({
+      json: {
+        ...data,
+        skip_reason: `Tier ${tier} limit exceeded (max ${tierLimit})`,
+        tier_count_at_skip: currentTierCount,
+        skipped_at: new Date().toISOString()
+      }
+    });
+  }
+});
+
+// =====================================================
+// FINAL SUMMARY STATISTICS
+// =====================================================
+console.log(`\n\n╔════════════════════════════════════════════════════╗`);
+console.log(`║     SIGNAL RANKING & SELECTION SUMMARY            ║`);
+console.log(`╚════════════════════════════════════════════════════╝`);
+
+console.log(`📊 Total Candidates: ${sortedSignals.length}`);
+console.log(`✅ Selected Signals: ${selectedSignals.length}`);
+console.log(`⏭️ Skipped Signals: ${skippedSignals.length}`);
+
+// Final tier distribution
+console.log(`\n🧬 Final Tier Distribution:`);
+console.log(`  Tier 1 (Low Risk): ${tierCounts[1]} signals ${CONFIG.TIER_LIMITS[1] === Infinity ? '(unlimited)' : `(max ${CONFIG.TIER_LIMITS[1]})`}`);
+console.log(`  Tier 2 (Medium Risk): ${tierCounts[2]}/${CONFIG.TIER_LIMITS[2]} signals`);
+console.log(`  Tier 3 (High Risk): ${tierCounts[3]}/${CONFIG.TIER_LIMITS[3]} signals`);
+
+// Risk exposure calculation
+if (selectedSignals.length > 0) {
+  const tier3Pct = (tierCounts[3] / selectedSignals.length) * 100;
+  const tier2Pct = (tierCounts[2] / selectedSignals.length) * 100;
+  const tier1Pct = (tierCounts[1] / selectedSignals.length) * 100;
+  
+  console.log(`\n📈 Portfolio Risk Exposure:`);
+  console.log(`  Tier 1 (Low Risk): ${tier1Pct.toFixed(1)}%`);
+  console.log(`  Tier 2 (Medium Risk): ${tier2Pct.toFixed(1)}%`);
+  console.log(`  Tier 3 (High Risk): ${tier3Pct.toFixed(1)}%`);
+  
+  // Direction distribution
+  const longCount = selectedSignals.filter(s => s.json.signal_direction === 'LONG').length;
+  const shortCount = selectedSignals.filter(s => s.json.signal_direction === 'SHORT').length;
+  
+  console.log(`\n📊 Direction Distribution:`);
+  console.log(`  LONG: ${longCount} signals (${(longCount / selectedSignals.length * 100).toFixed(1)}%)`);
+  console.log(`  SHORT: ${shortCount} signals (${(shortCount / selectedSignals.length * 100).toFixed(1)}%)`);
+  
+  // Quality metrics
+  const avgScore = selectedSignals.reduce((sum, s) => sum + s.json.total_score, 0) / selectedSignals.length;
+  const avgRR = selectedSignals.reduce((sum, s) => sum + s.json.fee_adjusted_rr, 0) / selectedSignals.length;
+  const avgLeverage = selectedSignals.reduce((sum, s) => sum + s.json.recommended_leverage, 0) / selectedSignals.length;
+  
+  console.log(`\n📊 Quality Metrics (Selected Signals):`);
+  console.log(`  Average Total Score: ${avgScore.toFixed(2)}/100`);
+  console.log(`  Average R/R Ratio: ${avgRR.toFixed(2)}`);
+  console.log(`  Average Leverage: ${avgLeverage.toFixed(1)}x`);
+  
+  // Final ranking list
+  console.log(`\n\n🏆 FINAL TOP ${selectedSignals.length} SIGNALS (Ready for Telegram):`);
+  console.log(`${'═'.repeat(80)}`);
+  
+  selectedSignals.forEach((sig, i) => {
+    const data = sig.json;
+    console.log(`\n  #${i + 1} ${data.symbol} - ${data.signal_direction}`);
+    console.log(`     Score: ${data.total_score.toFixed(2)}/100 | Tier: ${data.tier} | R/R: ${data.fee_adjusted_rr.toFixed(2)}`);
+    console.log(`     Leverage: ${data.recommended_leverage}x | Entry: ${data.entry_zone}`);
+    console.log(`     Market: ${data.market_condition} | Strength: ${data.signal_strength}`);
+  });
+  
+  console.log(`\n${'═'.repeat(80)}`);
+}
+
+// Skipped signals summary
+if (skippedSignals.length > 0) {
+  console.log(`\n⏭️ Skipped Signals Summary:`);
+  
+  const skipReasons = {};
+  skippedSignals.forEach(sig => {
+    const reason = sig.json.skip_reason;
+    skipReasons[reason] = (skipReasons[reason] || 0) + 1;
+  });
+  
+  Object.entries(skipReasons).forEach(([reason, count]) => {
+    console.log(`  ${reason}: ${count} signals`);
+  });
+  
+  console.log(`\n  Top 3 Skipped Signals:`);
+  skippedSignals.slice(0, 3).forEach((sig, i) => {
+    console.log(`    ${i + 1}. ${sig.json.symbol}: ${sig.json.total_score?.toFixed(2) || 'N/A'}/100 (${sig.json.skip_reason})`);
+  });
+}
+
+// =====================================================
+// RETURN OUTPUT
+// =====================================================
+if (selectedSignals.length > 0) {
+  console.log(`\n✅ Signal Ranking & Selection Complete`);
+  console.log(`📤 Passing ${selectedSignals.length} TOP signals to Telegram Message Generation`);
+  console.log(`\n🎯 These signals represent the highest quality, diversified trading opportunities`);
+  
+  return selectedSignals;
+} else {
+  console.log(`\n⚠️ NO SIGNALS SELECTED`);
+  console.log(`   All candidates were skipped (tier limits or max signals reached)`);
+  
+  return [{
+    json: {
+      error: 'No signals selected after ranking and diversification',
+      total_candidates: sortedSignals.length,
+      skipped_count: skippedSignals.length,
+      tier_limits: CONFIG.TIER_LIMITS,
+      timestamp: new Date().toISOString()
+    }
+  }];
+}
