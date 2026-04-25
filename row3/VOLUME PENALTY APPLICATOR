@@ -1,0 +1,222 @@
+// =====================================================
+// NODE 3: VOLUME PENALTY APPLICATOR v2.0
+// =====================================================
+// Получава от Score Aggregator:
+// - total_score (pure quality score)
+// - volume_penalty (изчислен от Volume Ratio Calculator преди агрегацията)
+//
+// Функция:
+// - Изважда volume_penalty от total_score
+// - Пререкласифицира signal_strength след penalty
+// - БЕЗ hard disqualifications (те са в Hard Filters Enforcer)
+// =====================================================
+
+console.log('⚖️ ═══════════════════════════════════════════════');
+console.log('   VOLUME PENALTY APPLICATOR v2.0');
+console.log('═══════════════════════════════════════════════');
+
+const inputData = $input.all();
+console.log(`📊 Applying volume penalties for ${inputData.length} symbols`);
+
+if (inputData.length === 0) {
+  console.log('⚠️ No input data received');
+  return [];
+}
+
+// =====================================================
+// PENALTY APPLICATION LOGIC
+// =====================================================
+function applyVolumePenalty(data) {
+  const originalScore = parseFloat(data.total_score || 0);
+  const penalty = parseFloat(data.volume_penalty || 0);
+  
+  console.log(`  Original Quality Score: ${originalScore.toFixed(2)}/100`);
+  console.log(`  Volume Penalty: ${penalty.toFixed(1)} points`);
+  
+  // Apply penalty (penalty is negative, so we ADD it which subtracts)
+  const adjustedScore = Math.max(0, Math.min(100, originalScore + penalty));
+  
+  console.log(`  Adjusted Score: ${adjustedScore.toFixed(2)}/100`);
+  
+  // Determine if penalty caused significant impact
+  const penaltyImpact = originalScore - adjustedScore;
+  let impactLevel = 'NONE';
+  
+  if (penaltyImpact === 0) {
+    impactLevel = 'NONE';
+  } else if (penaltyImpact <= 5) {
+    impactLevel = 'LOW';
+  } else if (penaltyImpact <= 10) {
+    impactLevel = 'MEDIUM';
+  } else {
+    impactLevel = 'HIGH';
+  }
+  
+  // Re-classify signal strength after penalty
+  let signalStrength = 'VERY_WEAK';
+  let confidenceLevel = 'VERY_LOW';
+  
+  if (adjustedScore >= 85) {
+    signalStrength = 'VERY_STRONG';
+    confidenceLevel = 'VERY_HIGH';
+  } else if (adjustedScore >= 75) {
+    signalStrength = 'STRONG';
+    confidenceLevel = 'HIGH';
+  } else if (adjustedScore >= 65) {
+    signalStrength = 'MEDIUM';
+    confidenceLevel = 'MEDIUM';
+  } else if (adjustedScore >= 50) {
+    signalStrength = 'WEAK';
+    confidenceLevel = 'LOW';
+  } else {
+    signalStrength = 'VERY_WEAK';
+    confidenceLevel = 'VERY_LOW';
+  }
+  
+  // Check if penalty caused reclassification
+  const originalStrength = data.signal_strength;
+  const wasDowngraded = originalStrength !== signalStrength;
+  
+  if (wasDowngraded) {
+    console.log(`  ⚠️ Signal DOWNGRADED: ${originalStrength} → ${signalStrength}`);
+  } else {
+    console.log(`  ✅ Signal UNCHANGED: ${signalStrength}`);
+  }
+  
+  return {
+    adjusted_score: parseFloat(adjustedScore.toFixed(2)),
+    signal_strength: signalStrength,
+    confidence_level: confidenceLevel,
+    penalty_applied: penalty !== 0,
+    penalty_impact: impactLevel,
+    was_downgraded: wasDowngraded,
+    original_strength: originalStrength,
+    score_change: parseFloat(penaltyImpact.toFixed(2))
+  };
+}
+
+// =====================================================
+// PROCESS EACH SYMBOL
+// =====================================================
+const results = [];
+let unchangedCount = 0;
+let downgradedCount = 0;
+
+inputData.forEach((item, index) => {
+  const data = item.json;
+  
+  console.log(`\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━`);
+  console.log(`📋 Symbol ${index + 1}/${inputData.length}: ${data.symbol}`);
+  console.log(`━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━`);
+  
+  // Apply penalty
+  const penaltyResult = applyVolumePenalty(data);
+  
+  // Track statistics
+  if (penaltyResult.was_downgraded) {
+    downgradedCount++;
+  } else {
+    unchangedCount++;
+  }
+  
+  // Build output
+  results.push({
+    json: {
+      // ═══════════════════════════════════════════════
+      // PASS-THROUGH ALL EXISTING DATA
+      // ═══════════════════════════════════════════════
+      ...data,
+      
+      // ═══════════════════════════════════════════════
+      // UPDATED SCORE (AFTER PENALTY)
+      // ═══════════════════════════════════════════════
+      total_score: penaltyResult.adjusted_score,
+      score_before_penalty: parseFloat(data.total_score || 0),
+      
+      // ═══════════════════════════════════════════════
+      // UPDATED CLASSIFICATION
+      // ═══════════════════════════════════════════════
+      signal_strength: penaltyResult.signal_strength,
+      confidence_level: penaltyResult.confidence_level,
+      
+      // ═══════════════════════════════════════════════
+      // PENALTY METADATA
+      // ═══════════════════════════════════════════════
+      penalty_applied: penaltyResult.penalty_applied,
+      penalty_impact: penaltyResult.penalty_impact,
+      was_downgraded: penaltyResult.was_downgraded,
+      original_signal_strength: penaltyResult.original_strength,
+      score_change_from_penalty: penaltyResult.score_change,
+      
+      // ═══════════════════════════════════════════════
+      // TIMESTAMPS
+      // ═══════════════════════════════════════════════
+      penalty_applied_at: new Date().toISOString()
+    }
+  });
+});
+
+// =====================================================
+// SUMMARY STATISTICS
+// =====================================================
+console.log(`\n\n╔════════════════════════════════════════════════════╗`);
+console.log(`║     VOLUME PENALTY APPLICATION SUMMARY            ║`);
+console.log(`╚════════════════════════════════════════════════════╝`);
+console.log(`📊 Total Symbols Processed: ${results.length}`);
+
+console.log(`\n⚡ Penalty Impact:`);
+console.log(`  ➡️ Unchanged: ${unchangedCount} symbols`);
+console.log(`  📉 Downgraded: ${downgradedCount} symbols`);
+
+// Final signal distribution
+const finalDistribution = {
+  VERY_STRONG: results.filter(r => r.json.signal_strength === 'VERY_STRONG').length,
+  STRONG: results.filter(r => r.json.signal_strength === 'STRONG').length,
+  MEDIUM: results.filter(r => r.json.signal_strength === 'MEDIUM').length,
+  WEAK: results.filter(r => r.json.signal_strength === 'WEAK').length,
+  VERY_WEAK: results.filter(r => r.json.signal_strength === 'VERY_WEAK').length
+};
+
+console.log(`\n🎖️ Final Signal Distribution (After Penalties):`);
+Object.entries(finalDistribution).forEach(([strength, count]) => {
+  if (count > 0) {
+    console.log(`  ${strength}: ${count} signals`);
+  }
+});
+
+// Penalty impact breakdown
+const impactBreakdown = {
+  NONE: results.filter(r => r.json.penalty_impact === 'NONE').length,
+  LOW: results.filter(r => r.json.penalty_impact === 'LOW').length,
+  MEDIUM: results.filter(r => r.json.penalty_impact === 'MEDIUM').length,
+  HIGH: results.filter(r => r.json.penalty_impact === 'HIGH').length
+};
+
+console.log(`\n📊 Penalty Impact Distribution:`);
+Object.entries(impactBreakdown).forEach(([impact, count]) => {
+  if (count > 0) {
+    console.log(`  ${impact}: ${count} symbols`);
+  }
+});
+
+// Average score change
+const avgScoreChange = results.reduce((sum, r) => sum + Math.abs(r.json.score_change_from_penalty || 0), 0) / results.length;
+console.log(`\n📉 Average Score Change: ${avgScoreChange.toFixed(2)} points`);
+
+// Top penalties
+console.log(`\n🔻 Top 3 Penalties Applied:`);
+results
+  .filter(r => r.json.penalty_applied)
+  .sort((a, b) => Math.abs(b.json.score_change_from_penalty) - Math.abs(a.json.score_change_from_penalty))
+  .slice(0, 3)
+  .forEach((r, i) => {
+    console.log(`  ${i + 1}. ${r.json.symbol}: -${Math.abs(r.json.score_change_from_penalty).toFixed(1)} points (${r.json.original_signal_strength} → ${r.json.signal_strength})`);
+  });
+
+console.log(`\n✅ Volume Penalty Application Complete`);
+console.log(`📤 Passing ${results.length} signals to TP/SL Calculator`);
+
+// =====================================================
+// RETURN OUTPUT
+// =====================================================
+return results;
