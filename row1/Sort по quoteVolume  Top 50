@@ -1,0 +1,16 @@
+// Sort по quoteVolume (обем в USDT) - най-ликвидните активи
+const sorted = items.sort((a, b) => {
+  const volumeA = parseFloat(a.json.quoteVolume || 0);
+  const volumeB = parseFloat(b.json.quoteVolume || 0);
+  return volumeB - volumeA; // descending
+});
+
+// Вземи само Top 50
+const top50 = sorted.slice(0, 50);
+
+console.log(`📊 Total USDT pairs: ${items.length}`);
+console.log(`🏆 Selected Top 50 by volume`);
+console.log(`💰 Top 1: ${top50[0].json.symbol} - ${top50[0].json.quoteVolume} USDT volume`);
+console.log(`💰 Top 50: ${top50[49].json.symbol} - ${top50[49].json.quoteVolume} USDT volume`);
+
+return top50;
