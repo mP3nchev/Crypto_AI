@@ -1,0 +1,237 @@
+// =====================================================
+// NODE 6: RISK/REWARD SCORE OUTPUT v2.0
+// =====================================================
+// Получава от Risk/Reward Filter:
+// - Само PASSED сигнали (filtered)
+// - fee_adjusted_rr_tp1/tp2/tp3/tp4
+// - weighted_rr_ratio
+// - rr_bonus
+//
+// Изчислява:
+// - risk_reward_score (0-100) - SUSTAINABILITY метрика
+// - Базирано на fee-adjusted R/R ratios
+// - Прилага R/R bonus от предишния node
+//
+// Това е SCORING node, не filter node
+// =====================================================
+
+console.log('💯 ═══════════════════════════════════════════════');
+console.log('   RISK/REWARD SCORE OUTPUT v2.0');
+console.log('═══════════════════════════════════════════════');
+
+const inputData = $input.all();
+console.log(`📊 Calculating R/R scores for ${inputData.length} signals`);
+
+if (inputData.length === 0) {
+  console.log('⚠️ No input data received (all signals may have been filtered)');
+  return [];
+}
+
+// =====================================================
+// SCORING CONFIGURATION
+// =====================================================
+const SCORING_WEIGHTS = {
+  tp1: 0.40,  // 40% weight (primary target)
+  tp2: 0.30,  // 30% weight (main target)
+  tp3: 0.20,  // 20% weight (extended)
+  tp4: 0.10   // 10% weight (moon shot)
+};
+
+// R/R to Score mapping (linear interpolation)
+const RR_SCORE_THRESHOLDS = {
+  perfect: { rr: 5.0, score: 100 },   // 5:1 R/R = 100 points
+  excellent: { rr: 4.0, score: 90 },  // 4:1 R/R = 90 points
+  great: { rr: 3.5, score: 80 },      // 3.5:1 R/R = 80 points
+  good: { rr: 3.0, score: 70 },       // 3:1 R/R = 70 points
+  acceptable: { rr: 2.5, score: 60 }, // 2.5:1 R/R = 60 points
+  minimum: { rr: 2.0, score: 50 },    // 2:1 R/R = 50 points
+  floor: { rr: 0, score: 0 }           // 0:1 R/R = 0 points
+};
+
+// =====================================================
+// HELPER: MAP R/R TO SCORE (0-100)
+// =====================================================
+function mapRRToScore(rrValue) {
+  if (rrValue >= RR_SCORE_THRESHOLDS.perfect.rr) {
+    return 100;
+  }
+  
+  // Find the appropriate range and interpolate
+  const thresholds = Object.values(RR_SCORE_THRESHOLDS).sort((a, b) => b.rr - a.rr);
+  
+  for (let i = 0; i < thresholds.length - 1; i++) {
+    const upper = thresholds[i];
+    const lower = thresholds[i + 1];
+    
+    if (rrValue >= lower.rr && rrValue <= upper.rr) {
+      // Linear interpolation
+      const rrRange = upper.rr - lower.rr;
+      const scoreRange = upper.score - lower.score;
+      const rrPosition = (rrValue - lower.rr) / rrRange;
+      const score = lower.score + (scoreRange * rrPosition);
+      return Math.round(score);
+    }
+  }
+  
+  return 0;
+}
+
+// =====================================================
+// R/R SCORE CALCULATION FUNCTION
+// =====================================================
+function calculateRRScore(data) {
+  // Extract fee-adjusted R/R for all TPs
+  const rrTP1 = parseFloat(data.fee_adjusted_rr_tp1 || 0);
+  const rrTP2 = parseFloat(data.fee_adjusted_rr_tp2 || 0);
+  const rrTP3 = parseFloat(data.fee_adjusted_rr_tp3 || 0);
+  const rrTP4 = parseFloat(data.fee_adjusted_rr_tp4 || 0);
+  const weightedRR = parseFloat(data.weighted_rr_ratio || 0);
+  const rrBonus = parseFloat(data.rr_bonus || 0);
+  
+  console.log(`  R/R Ratios (Fee-Adjusted):`);
+  console.log(`    TP1: ${rrTP1.toFixed(2)}`);
+  console.log(`    TP2: ${rrTP2.toFixed(2)}`);
+  console.log(`    TP3: ${rrTP3.toFixed(2)}`);
+  console.log(`    TP4: ${rrTP4.toFixed(2)}`);
+  console.log(`    Weighted: ${weightedRR.toFixed(2)}`);
+  
+  // Convert each R/R to score (0-100)
+  const scoreTP1 = mapRRToScore(rrTP1);
+  const scoreTP2 = mapRRToScore(rrTP2);
+  const scoreTP3 = mapRRToScore(rrTP3);
+  const scoreTP4 = mapRRToScore(rrTP4);
+  
+  console.log(`  Mapped Scores:`);
+  console.log(`    TP1: ${scoreTP1}/100`);
+  console.log(`    TP2: ${scoreTP2}/100`);
+  console.log(`    TP3: ${scoreTP3}/100`);
+  console.log(`    TP4: ${scoreTP4}/100`);
+  
+  // Weighted average of TP scores
+  const weightedScore = 
+    (scoreTP1 * SCORING_WEIGHTS.tp1) +
+    (scoreTP2 * SCORING_WEIGHTS.tp2) +
+    (scoreTP3 * SCORING_WEIGHTS.tp3) +
+    (scoreTP4 * SCORING_WEIGHTS.tp4);
+  
+  console.log(`  Weighted Score: ${weightedScore.toFixed(2)}/100`);
+  
+  // Apply R/R bonus (from previous filter)
+  const finalScore = Math.min(100, weightedScore + rrBonus);
+  
+  if (rrBonus > 0) {
+    console.log(`  R/R Bonus: +${rrBonus} points`);
+  }
+  console.log(`  🎯 Final R/R Score: ${finalScore.toFixed(2)}/100`);
+  
+  return {
+    risk_reward_score: Math.round(finalScore),
+    score_components: {
+      tp1_score: scoreTP1,
+      tp2_score: scoreTP2,
+      tp3_score: scoreTP3,
+      tp4_score: scoreTP4,
+      weighted_base_score: parseFloat(weightedScore.toFixed(2)),
+      bonus_applied: rrBonus,
+      final_score: Math.round(finalScore)
+    },
+    scoring_weights: SCORING_WEIGHTS
+  };
+}
+
+// =====================================================
+// PROCESS EACH SYMBOL
+// =====================================================
+const results = inputData.map((item, index) => {
+  const data = item.json;
+  
+  console.log(`\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━`);
+  console.log(`📋 Symbol ${index + 1}/${inputData.length}: ${data.symbol}`);
+  console.log(`━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━`);
+  
+  // Calculate R/R score
+  const rrScoreResult = calculateRRScore(data);
+  
+  return {
+    json: {
+      // ═══════════════════════════════════════════════
+      // PASS-THROUGH ALL EXISTING DATA
+      // ═══════════════════════════════════════════════
+      ...data,
+      
+      // ═══════════════════════════════════════════════
+      // RISK/REWARD SCORE (SUSTAINABILITY METRIC)
+      // ═══════════════════════════════════════════════
+      risk_reward_score: rrScoreResult.risk_reward_score,
+      
+      // ═══════════════════════════════════════════════
+      // SCORE BREAKDOWN (FOR AUDIT)
+      // ═══════════════════════════════════════════════
+      rr_score_components: rrScoreResult.score_components,
+      rr_scoring_weights: rrScoreResult.scoring_weights,
+      
+      // ═══════════════════════════════════════════════
+      // TIMESTAMPS
+      // ═══════════════════════════════════════════════
+      rr_score_calculated_at: new Date().toISOString()
+    }
+  };
+});
+
+// =====================================================
+// SUMMARY STATISTICS
+// =====================================================
+console.log(`\n\n╔════════════════════════════════════════════════════╗`);
+console.log(`║     RISK/REWARD SCORE SUMMARY                      ║`);
+console.log(`╚════════════════════════════════════════════════════╝`);
+console.log(`📊 Total Signals Scored: ${results.length}`);
+
+const avgRRScore = results.reduce((sum, r) => sum + r.json.risk_reward_score, 0) / results.length;
+const maxRRScore = Math.max(...results.map(r => r.json.risk_reward_score));
+const minRRScore = Math.min(...results.map(r => r.json.risk_reward_score));
+
+console.log(`\n📈 R/R Score Statistics:`);
+console.log(`  Average: ${avgRRScore.toFixed(1)}/100`);
+console.log(`  Maximum: ${maxRRScore}/100`);
+console.log(`  Minimum: ${minRRScore}/100`);
+
+// Score distribution
+const scoreDistribution = {
+  'Perfect (95-100)': results.filter(r => r.json.risk_reward_score >= 95).length,
+  'Excellent (85-94)': results.filter(r => r.json.risk_reward_score >= 85 && r.json.risk_reward_score < 95).length,
+  'Great (75-84)': results.filter(r => r.json.risk_reward_score >= 75 && r.json.risk_reward_score < 85).length,
+  'Good (65-74)': results.filter(r => r.json.risk_reward_score >= 65 && r.json.risk_reward_score < 75).length,
+  'Acceptable (50-64)': results.filter(r => r.json.risk_reward_score >= 50 && r.json.risk_reward_score < 65).length,
+  'Poor (<50)': results.filter(r => r.json.risk_reward_score < 50).length
+};
+
+console.log(`\n🎖️ R/R Score Distribution:`);
+Object.entries(scoreDistribution).forEach(([range, count]) => {
+  if (count > 0) {
+    console.log(`  ${range}: ${count} signals`);
+  }
+});
+
+// Perfect scores
+const perfectScores = results.filter(r => r.json.risk_reward_score === 100).length;
+if (perfectScores > 0) {
+  console.log(`\n🏆 Perfect 100/100 Scores: ${perfectScores} signals`);
+}
+
+// Top R/R scores
+console.log(`\n🥇 Top 5 R/R Scores:`);
+results
+  .sort((a, b) => b.json.risk_reward_score - a.json.risk_reward_score)
+  .slice(0, 5)
+  .forEach((r, i) => {
+    const bonus = r.json.rr_bonus > 0 ? ` (+${r.json.rr_bonus} bonus)` : '';
+    console.log(`  ${i + 1}. ${r.json.symbol}: ${r.json.risk_reward_score}/100${bonus} (R/R: ${r.json.fee_adjusted_rr.toFixed(2)})`);
+  });
+
+console.log(`\n✅ Risk/Reward Score Calculation Complete`);
+console.log(`📤 Passing ${results.length} signals to Technical Level Identifier`);
+
+// =====================================================
+// RETURN OUTPUT
+// =====================================================
+return results;
