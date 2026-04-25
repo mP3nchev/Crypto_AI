@@ -1,0 +1,16 @@
+const allCandles = $input.all();
+const grouped = new Map();
+
+allCandles.forEach(item => {
+  const symbol = item.json.symbol;
+  if (!grouped.has(symbol)) grouped.set(symbol, []);
+  grouped.get(symbol).push(item.json);
+});
+
+const result = [];
+grouped.forEach((candles, symbol) => {
+  candles.sort((a, b) => b.open_time - a.open_time);
+  candles.slice(0, 20).forEach(c => result.push({ json: c }));
+});
+
+return result;
