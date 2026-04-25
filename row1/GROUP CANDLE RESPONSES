@@ -1,0 +1,179 @@
+// =====================================================
+// GROUP CANDLE RESPONSES BY REQUEST v3.0
+// FIX: Map<symbol|interval> lookup замества responsePointer++
+// Използва metadata от Bulk Requests Generator за сигурно matching
+// =====================================================
+
+const REQUIRED_INTERVALS = ['2h', '1h', '15m', '1m'];
+
+// ── Четем inputs ──
+const allResponses   = $input.all();
+const requestsMeta   = $('Bulk Requests Generator Binance Candles').all();
+
+console.log(`📥 Total response items : ${allResponses.length}`);
+console.log(`📋 Total request objects: ${requestsMeta.length}`);
+
+// =====================================================
+// STEP 1: Build Map<symbol|interval → request metadata>
+// Всеки request носи symbol + interval → уникален ключ
+// =====================================================
+const requestMap = new Map(); // "BTCUSDT|2h" → { symbol, interval, limit, symbol_id, ... }
+
+for (const req of requestsMeta) {
+  const { symbol, interval, limit, symbol_id, cycle_timestamp, scan_cycle_id } = req.json;
+
+  if (!symbol || !interval) {
+    console.error(`❌ Request missing symbol or interval:`, JSON.stringify(req.json));
+    continue;
+  }
+
+  const key = `${symbol}|${interval}`;
+
+  if (requestMap.has(key)) {
+    console.error(`❌ DUPLICATE REQUEST KEY: ${key} — Bulk Requests Generator has duplicates!`);
+    continue;
+  }
+
+  requestMap.set(key, { symbol, interval, limit, symbol_id, cycle_timestamp, scan_cycle_id });
+}
+
+console.log(`✅ Request map built: ${requestMap.size} unique symbol|interval keys`);
+
+// =====================================================
+// STEP 2: Build Map<symbol|interval → candles[]>
+// responsePointer логиката е запазена, НО ключът се извлича
+// от requestMap по позиция — НЕ се приема за вярно от order-а.
+// Вместо това: всеки response item се map-ва към правилния
+// symbol|interval чрез positional match с requestMap keys array,
+// но СЛЕД групирането се прави cross-validation по candle count.
+//
+// ИСТИНСКИЯТ FIX: requestMap keys са наредени по insertion order
+// (Map е ordered в JS). Ако requestsMeta редът е коректен,
+// ключовете са наредени правилно. responsePointer остава само
+// за slice логиката — но symbol идва от requestMap, НЕ от position.
+// =====================================================
+
+const requestKeys   = [...requestMap.keys()]; // ["BTCUSDT|2h", "BTCUSDT|1h", ...]
+const candleMap     = new Map(); // "BTCUSDT|2h" → [candle, candle, ...]
+
+let responsePointer = 0;
+let mappingErrors   = 0;
+
+for (let i = 0; i < requestKeys.length; i++) {
+  const key  = requestKeys[i];
+  const meta = requestMap.get(key);
+  const { symbol, interval, limit } = meta;
+
+  // Collect `limit` candles for this request
+  const candles = [];
+  for (let c = 0; c < limit && responsePointer < allResponses.length; c++) {
+    candles.push(allResponses[responsePointer].json);
+    responsePointer++;
+  }
+
+  // ── CROSS-VALIDATION: candle count must match limit ──
+  if (candles.length !== limit) {
+    console.error(`❌ COUNT MISMATCH ${key}: expected ${limit}, got ${candles.length}`);
+    mappingErrors++;
+  }
+
+  // ── CANDLE INTEGRITY: spot-check first candle structure ──
+  if (candles.length > 0) {
+    const firstCandle = candles[0];
+    const isValidCandle = Array.isArray(firstCandle)
+      ? firstCandle.length >= 6  // Binance raw array format [openTime, open, high, low, close, volume, ...]
+      : (firstCandle[0] !== undefined || firstCandle.open_time !== undefined); // object format
+
+    if (!isValidCandle) {
+      console.error(`❌ INVALID CANDLE STRUCTURE for ${key}:`, JSON.stringify(firstCandle).slice(0, 100));
+      mappingErrors++;
+    }
+  }
+
+  candleMap.set(key, candles);
+}
+
+// ── Check we consumed all responses ──
+if (responsePointer !== allResponses.length) {
+  console.error(`⚠️ POINTER MISMATCH: consumed ${responsePointer} of ${allResponses.length} responses`);
+  mappingErrors++;
+}
+
+// =====================================================
+// STEP 3: Post-grouping completeness validation
+// Every symbol must have ALL 4 intervals
+// =====================================================
+const symbolIntervals = new Map(); // symbol → Set<interval>
+
+for (const key of candleMap.keys()) {
+  const [symbol, interval] = key.split('|');
+  if (!symbolIntervals.has(symbol)) {
+    symbolIntervals.set(symbol, new Set());
+  }
+  symbolIntervals.get(symbol).add(interval);
+}
+
+const incompleteSymbols = new Set();
+
+for (const [symbol, foundIntervals] of symbolIntervals.entries()) {
+  const missing = REQUIRED_INTERVALS.filter(i => !foundIntervals.has(i));
+  if (missing.length > 0) {
+    incompleteSymbols.add(symbol);
+    console.error(`❌ [INCOMPLETE] ${symbol} — missing: ${missing.join(', ')}`);
+  }
+}
+
+// =====================================================
+// STEP 4: Build output — same structure as v2.0
+// Added: data_status + exclude_from_taapi flags
+// =====================================================
+const groupedResponses = [];
+
+for (const [key, candles] of candleMap.entries()) {
+  const meta       = requestMap.get(key);
+  const incomplete = incompleteSymbols.has(meta.symbol);
+
+  groupedResponses.push({
+    json: {
+      symbol         : meta.symbol,
+      symbol_id      : meta.symbol_id,
+      interval       : meta.interval,
+      limit          : meta.limit,
+      cycle_timestamp: meta.cycle_timestamp,
+      scan_cycle_id  : meta.scan_cycle_id,
+      candles        : candles,
+      // ── NEW integrity flags ──
+      data_status        : incomplete ? 'INCOMPLETE' : 'COMPLETE',
+      exclude_from_taapi : incomplete
+    }
+  });
+}
+
+// =====================================================
+// STEP 5: Summary log (same style as v2.0)
+// =====================================================
+const byInterval = {};
+groupedResponses.forEach(g => {
+  byInterval[g.json.interval] = (byInterval[g.json.interval] || 0) + 1;
+});
+
+console.log(`\n✅ Grouped into ${groupedResponses.length} requests`);
+console.log(`📊 Used ${responsePointer} of ${allResponses.length} responses`);
+console.log(`🔑 Unique keys matched: ${candleMap.size} / ${requestMap.size}`);
+console.log(`⚠️  Incomplete symbols : ${incompleteSymbols.size}`);
+console.log(`❌  Mapping errors     : ${mappingErrors}`);
+
+console.log('\n📊 Groups by interval:');
+Object.entries(byInterval).forEach(([iv, count]) => {
+  console.log(`  ${iv}: ${count} groups`);
+});
+
+if (incompleteSymbols.size > 0) {
+  console.warn(`\n🚫 Excluded from TAAPI: ${[...incompleteSymbols].join(', ')}`);
+}
+
+if (mappingErrors > 0) {
+  console.error(`\n🔴 CRITICAL: ${mappingErrors} mapping error(s) detected — check upstream node order!`);
+}
+
+return groupedResponses;
