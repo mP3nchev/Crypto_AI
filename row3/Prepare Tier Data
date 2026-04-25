@@ -1,0 +1,77 @@
+// =====================================================
+// BRANCH 1.3: PREPARE TIER DATA FOR INSERT
+// Филтрира само tier-related полета за asset_tiers таблица
+// =====================================================
+
+console.log('💾 === PREPARE TIER DATA FOR INSERT ===');
+
+const volatilityResults = $input.all();
+console.log(`Preparing ${volatilityResults.length} records for asset_tiers table`);
+
+// =====================================================
+// EXTRACT ONLY TIER FIELDS
+// =====================================================
+
+const tierRecords = volatilityResults.map(item => {
+  const data = item.json;
+  
+  return {
+    json: {
+      // ===== REQUIRED FIELDS =====
+      symbol_id: data.symbol_id,
+      symbol: data.symbol,
+      
+      // ===== TIER CLASSIFICATION =====
+      tier: data.tier,
+      tier_name: data.tier_name,
+      rank_position: data.rank_position,
+      
+      // ===== ATR THRESHOLDS =====
+      atr_threshold_low: data.atr_threshold_low,
+      atr_threshold_high: data.atr_threshold_high,
+      
+      // ===== VOLATILITY ANALYSIS =====
+      current_atr_1h: data.current_atr_1h,
+      atr_percentage_1h: data.atr_percentage_1h,
+      volatility_status: data.volatility_status,
+      volatility_score: data.volatility_score,
+      volatility_warning: data.volatility_warning,
+      
+      // ===== RISK PROFILE =====
+      risk_level: data.risk_level,
+      max_suggested_leverage: data.max_suggested_leverage,
+      
+      // ===== CYCLE TRACKING =====
+      cycle_timestamp: data.cycle_timestamp,
+      scan_cycle_id: data.scan_cycle_id,
+      
+      // ===== METADATA =====
+      processed_at: data.analysis_timestamp || new Date().toISOString()
+    }
+  };
+});
+
+console.log(`✅ Prepared ${tierRecords.length} records for asset_tiers`);
+console.log(`🔄 Cycle: ${tierRecords[0]?.json?.scan_cycle_id || 'N/A'}`);
+
+// =====================================================
+// VALIDATION
+// =====================================================
+
+const invalidRecords = tierRecords.filter(r => 
+  !r.json.symbol_id || 
+  !r.json.symbol || 
+  !r.json.tier ||
+  !r.json.scan_cycle_id
+);
+
+if (invalidRecords.length > 0) {
+  console.error(`❌ WARNING: ${invalidRecords.length} invalid records found!`);
+  invalidRecords.forEach(r => {
+    console.error(`  - ${r.json.symbol || 'UNKNOWN'}: Missing required fields`);
+  });
+}
+
+console.log('\n✅ Ready for Node 1.4: Supabase INSERT (asset_tiers)');
+
+return tierRecords;
