@@ -1,0 +1,255 @@
+// =====================================================
+// NODE 6.1: VOLUME SCORE CALCULATOR v2.1
+// =====================================================
+
+console.log('=== VOLUME SCORE CALCULATOR v2.1 START ===');
+
+const inputData = $input.all();
+console.log(`Calculating volume scores for ${inputData.length} symbols`);
+
+// =====================================================
+// VOLUME SCORING FUNCTION
+// =====================================================
+
+function calculateVolumeScore(data) {
+  let totalScore = 0;
+  let maxScore = 0;
+  let penalty = 0;
+  let volumeRatio = 0;
+  
+  console.log(`\n--- ${data.symbol} ---`);
+  
+  // =====================================================
+  // COMPONENT 1: VOLUME TIER + RATIO (50 points max)
+  // =====================================================
+  
+  const cs_volume = parseFloat(data.cs_volume);
+  const candle_volume = parseFloat(data.candle_volume);
+  
+  if (!isNaN(cs_volume) && cs_volume > 0) {
+    maxScore += 50;
+    
+    let volumePoints = 0;
+    let volumeStatus = '';
+    
+    if (cs_volume >= 1000000000) {
+      volumePoints = 70;
+      volumeStatus = 'EXCELLENT';
+    } else if (cs_volume >= 500000000) {
+      volumePoints = 60;
+      volumeStatus = 'GOOD';
+    } else if (cs_volume >= 100000000) {
+      volumePoints = 50;
+      volumeStatus = 'MODERATE';
+    } else if (cs_volume >= 50000000) {
+      volumePoints = 30;
+      volumeStatus = 'LOW';
+    } else {
+      volumePoints = 10;
+      volumeStatus = 'VERY_LOW';
+    }
+    
+    totalScore += volumePoints;
+    console.log(`  24h Volume: $${(cs_volume / 1000000).toFixed(2)}M -> ${volumePoints} points (${volumeStatus})`);
+    
+    // =====================================================
+    // VOLUME RATIO CALCULATION
+    // =====================================================
+    if (!isNaN(candle_volume) && candle_volume > 0) {
+      
+      const medianVolume1h = parseFloat(data.median_volume_1h || 0);
+      
+      const baseline_1h = medianVolume1h > 0 
+        ? medianVolume1h
+        : (cs_volume / 24);
+      
+      volumeRatio = candle_volume / baseline_1h;
+      
+      const baselineMethod = medianVolume1h > 0 
+        ? 'Median 1h (12h history)' 
+        : 'Simple Avg (24h/24)';
+      
+      console.log(`  Baseline Method: ${baselineMethod}`);
+      console.log(`  Baseline (1h): ${baseline_1h.toFixed(2)}`);
+      console.log(`  Volume Ratio: ${volumeRatio.toFixed(3)} (current 1h / typical 1h)`);
+      
+      // =====================================================
+      // GRADUATED PENALTY THRESHOLDS
+      // =====================================================
+      
+   // Hard Disqualification - Volume Ratio < 0.3 (TRADING_PRINCIPLES §4.1)
+      if (volumeRatio < 0.3) {
+        return {
+          score: 0,
+          penalty: -100,
+          volume_ratio: volumeRatio,
+          status: 'HARD_DISQUALIFIED',
+          disqualification_reason: 'VOLUME_CRITICALLY_LOW',
+          volume_disqualified: true
+        };
+      }
+      // Soft Penalty Zone - Volume Ratio 0.3-0.49
+      else if (volumeRatio < 0.5) {
+        penalty = -100;
+        volumeStatus = 'DISQUALIFIED';
+        console.log(`  ⚠️ SOFT DISQUALIFIED: Volume ratio ${volumeRatio.toFixed(3)} in 0.3-0.5 range → penalty applied`);
+      }
+        
+      // Range 0.5-0.59: -15 до -10 (scaling)
+      else if (volumeRatio >= 0.5 && volumeRatio < 0.6) {
+        const scaledPenalty = -15 + ((volumeRatio - 0.5) / 0.1) * 5;
+        penalty = Math.round(scaledPenalty * 10) / 10;
+        volumeStatus = 'VERY_LOW';
+        console.log(`  ⚠️ Scaled Penalty: ${penalty.toFixed(1)} points (ratio ${volumeRatio.toFixed(3)} in range 0.5-0.59)`);
+      }
+      // Range 0.6-0.69: -10 до -5 (scaling)
+      else if (volumeRatio >= 0.6 && volumeRatio < 0.7) {
+        const scaledPenalty = -10 + ((volumeRatio - 0.6) / 0.1) * 5;
+        penalty = Math.round(scaledPenalty * 10) / 10;
+        volumeStatus = 'BELOW_NORMAL';
+        console.log(`  ⚠️ Scaled Penalty: ${penalty.toFixed(1)} points (ratio ${volumeRatio.toFixed(3)} in range 0.6-0.69)`);
+      }
+      // Range 0.7-0.79: -5 до 0 (scaling)
+      else if (volumeRatio >= 0.7 && volumeRatio < 0.8) {
+        const scaledPenalty = -5 + ((volumeRatio - 0.7) / 0.1) * 5;
+        penalty = Math.round(scaledPenalty * 10) / 10;
+        volumeStatus = 'SLIGHTLY_LOW';
+        console.log(`  ℹ️ Scaled Penalty: ${penalty.toFixed(1)} points (ratio ${volumeRatio.toFixed(3)} in range 0.7-0.79)`);
+      }
+      // >= 0.8: No penalty
+      else {
+        penalty = 0;
+        volumeStatus = 'NORMAL';
+        console.log(`  ✅ No penalty (ratio ${volumeRatio.toFixed(3)} >= 0.8 = normal/high volume)`);
+      }
+      
+    } else {
+      console.log(`  ⚠️ Missing 1h candle volume data`);
+    }
+  }
+  
+  // =====================================================
+  // COMPONENT 2: OBV ANALYSIS (30 points max)
+  // =====================================================
+  
+  const obv_1h = parseFloat(data.obv_1h);
+  
+  if (!isNaN(obv_1h)) {
+    maxScore += 30;
+    console.log(`  OBV (1h): ${obv_1h.toFixed(2)}`);
+    
+    if (obv_1h > 1000000) {
+      totalScore += 30;
+      console.log(`  Strong buying pressure: +30 points`);
+    } else if (obv_1h > 0) {
+      totalScore += 25;
+      console.log(`  Positive OBV: +25 points`);
+    } else if (obv_1h > -1000000) {
+      totalScore += 15;
+      console.log(`  Mild selling pressure: +15 points`);
+    } else {
+      totalScore += 5;
+      console.log(`  Strong selling pressure: +5 points`);
+    }
+  } else {
+    console.log(`  OBV data unavailable`);
+  }
+  
+  // =====================================================
+  // COMPONENT 3: MFI ANALYSIS (20 points max)
+  // =====================================================
+  
+  const mfi_2h = parseFloat(data.mfi_2h);
+  
+  if (!isNaN(mfi_2h)) {
+    maxScore += 20;
+    console.log(`  MFI (2h): ${mfi_2h.toFixed(2)}`);
+    
+    if (mfi_2h >= 50 && mfi_2h <= 70) {
+      totalScore += 20;
+      console.log(`  Optimal MFI zone: +20 points`);
+    } else if (mfi_2h > 70 && mfi_2h <= 80) {
+      totalScore += 15;
+      console.log(`  Strong buying: +15 points`);
+    } else if (mfi_2h > 80) {
+      totalScore += 10;
+      console.log(`  Overbought: +10 points`);
+    } else if (mfi_2h >= 30 && mfi_2h < 50) {
+      totalScore += 12;
+      console.log(`  Neutral: +12 points`);
+    } else if (mfi_2h >= 20 && mfi_2h < 30) {
+      totalScore += 15;
+      console.log(`  Oversold zone: +15 points`);
+    } else {
+      totalScore += 18;
+      console.log(`  Extreme oversold: +18 points`);
+    }
+  } else {
+    console.log(`  MFI data unavailable`);
+  }
+  
+  // =====================================================
+  // FINAL SCORE
+  // =====================================================
+  
+  const finalScore = maxScore > 0 ? Math.round((totalScore / maxScore) * 100) : 0;
+  
+  console.log(`  Volume Score: ${finalScore}/100 | Penalty: ${penalty}`);
+  
+  return {
+    score: finalScore,
+    penalty: penalty,
+    volume_ratio: volumeRatio,
+    status: penalty === -100 ? 'DISQUALIFIED' : (penalty < 0 ? 'PENALIZED' : 'GOOD')
+  };
+}
+
+// =====================================================
+// PROCESS EACH SYMBOL
+// =====================================================
+const results = inputData
+  .map(item => {
+    const data = item.json;
+    const volume = calculateVolumeScore(data);
+    
+    // Hard disqualified символи се филтрират тук — не достигат MERGE
+    if (volume.volume_disqualified === true) {
+      console.log(`  🚫 HARD DISQUALIFIED: ${data.symbol} | ratio: ${volume.volume_ratio.toFixed(3)} < 0.3 → dropped before MERGE`);
+      return null;
+    }
+    
+    return {
+      json: {
+        ...data,
+        volume_score: volume.score,
+        volume_penalty: volume.penalty,
+        volume_ratio: volume.volume_ratio,
+        volume_status: volume.status,
+        scored_at: new Date().toISOString()
+      }
+    };
+  })
+  .filter(item => item !== null);  // remove hard-disqualified Symbols
+
+console.log(`\n✅ Volume scoring complete for ${results.length} symbols`);
+
+const avgScore = results.reduce((sum, r) => sum + (r.json.volume_score || 0), 0) / results.length;
+console.log(`📊 Average Volume Score: ${avgScore.toFixed(1)}/100`);
+
+const avgPenalty = results.reduce((sum, r) => sum + (r.json.volume_penalty || 0), 0) / results.length;
+console.log(`📉 Average Penalty: ${avgPenalty.toFixed(1)} points`);
+
+const statusCounts = {
+  HARD_DISQUALIFIED: inputData.length - results.length,
+  DISQUALIFIED: results.filter(r => r.json.volume_status === 'DISQUALIFIED').length,
+  PENALIZED: results.filter(r => r.json.volume_status === 'PENALIZED').length,
+  GOOD: results.filter(r => r.json.volume_status === 'GOOD').length
+};
+
+console.log(`\n📊 Volume Status Distribution:`);
+console.log(`  🔴 HARD DISQUALIFIED: ${statusCounts.HARD_DISQUALIFIED} (ratio < 0.3 → dropped)`);
+console.log(`  🚫 DISQUALIFIED: ${statusCounts.DISQUALIFIED} (ratio 0.3-0.5 → penalty -100)`);
+console.log(`  ⚠️ PENALIZED: ${statusCounts.PENALIZED} (ratio 0.5-0.79)`);
+console.log(`  ✅ GOOD: ${statusCounts.GOOD} (ratio >= 0.8)`);
+
+return results;
