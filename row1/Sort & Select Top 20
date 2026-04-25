@@ -1,0 +1,60 @@
+// SORT & SELECT TOP 20 - EXCLUDE STABLE COINS
+
+console.log('🚫 Filtering out stable coins before sorting...');
+
+const stableCoinBlacklist = [
+  'USDCUSDT',
+  'USDEUSDT'
+];
+
+console.log(`📋 Stable coins to exclude: ${stableCoinBlacklist.join(', ')}`);
+
+const originalCount = items.length;
+const filteredItems = items.filter(item => {
+  const symbol = item.json.symbol;
+  const isStableCoin = stableCoinBlacklist.includes(symbol);
+  
+  if (isStableCoin) {
+    console.log(`🚫 Excluding stable coin: ${symbol}`);
+    return false;
+  }
+  
+  return true;
+});
+
+console.log(`📊 Original items: ${originalCount}`);
+console.log(`📊 After stable coin filter: ${filteredItems.length}`);
+console.log(`🚫 Excluded: ${originalCount - filteredItems.length} stable coins`);
+
+console.log('📈 Sorting by quote volume...');
+filteredItems.sort((a, b) => {
+  const volumeA = parseFloat(a.json.quoteVolume) || 0;
+  const volumeB = parseFloat(b.json.quoteVolume) || 0;
+  return volumeB - volumeA;
+});
+
+const topSymbols = filteredItems.slice(0, 20);
+console.log(`🎯 Final selection: ${topSymbols.length} trading pairs`);
+
+console.log(`🥇 Top 20 symbols by volume:`);
+topSymbols.forEach((item, index) => {
+  const symbol = item.json.symbol;
+  const volume = parseFloat(item.json.quoteVolume).toLocaleString();
+  console.log(`   ${index + 1}. ${symbol} - Volume: ${volume}`);
+});
+
+if (topSymbols.length < 20) {
+  console.log(`⚠️  Warning: Only ${topSymbols.length} symbols available after filtering`);
+}
+
+const finalSymbols = topSymbols.map(item => item.json.symbol);
+const foundStableCoins = finalSymbols.filter(symbol => stableCoinBlacklist.includes(symbol));
+
+if (foundStableCoins.length > 0) {
+  console.error(`❌ ERROR: Stable coins found in final list: ${foundStableCoins.join(', ')}`);
+} else {
+  console.log(`✅ Validation passed: No stable coins in final list`);
+}
+
+console.log(`🎯 Ready for crypto symbols metadata processing`);
+return topSymbols;
