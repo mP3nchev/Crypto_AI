@@ -1,0 +1,185 @@
+// =====================================================
+// BRANCH 5.2: VOLATILITY SCORE CALCULATOR
+// ✅ КОД ЗАПАЗЕН 100% ОТ Main JS.pdf
+// ⚠️ Трябва tier от asset_tiers (предходен node)
+// =====================================================
+
+console.log('📉 === VOLATILITY SCORE CALCULATOR START ===');
+
+const inputData = $input.all();
+console.log(`Calculating volatility scores for ${inputData.length} symbols`);
+
+// =====================================================
+// HELPERS
+// =====================================================
+
+function getScanData(data) {
+  if (data.scan_data) return data.scan_data;
+  return data;
+}
+
+function safeFloat(value, defaultValue = 0) {
+  const parsed = parseFloat(value);
+  return isNaN(parsed) ? defaultValue : parsed;
+}
+
+// =====================================================
+// VOLATILITY SCORING LOGIC (TIER-ADJUSTED)
+// =====================================================
+
+function calculateVolatilityScore(scanData, tier, atrThresholdLow, atrThresholdHigh) {
+  let totalScore = 0;
+  let maxScore = 0;
+  const components = {};
+  
+  // ATR Analysis (60 points max)
+  const atr_1h = safeFloat(scanData.atr_1h);
+  const close_price = safeFloat(scanData.close_price);
+  
+  // ✅ Initialize volatility status
+  let volatilityStatus = 'UNKNOWN';
+  let atrPercentage = 0;
+  
+  if (atr_1h > 0 && close_price > 0) {
+    maxScore += 60;
+    
+    atrPercentage = (atr_1h / close_price) * 100;
+    let atrScore = 0;
+    
+    // Score based on tier-adjusted thresholds
+    if (atrPercentage <= atrThresholdLow * 0.5) {
+      atrScore = 20;
+      volatilityStatus = 'LOW';
+    } else if (atrPercentage <= atrThresholdLow) {
+      atrScore = 40;
+      volatilityStatus = 'NORMAL';
+    } else if (atrPercentage <= atrThresholdHigh) {
+      atrScore = 60;
+      volatilityStatus = 'OPTIMAL';
+    } else if (atrPercentage <= atrThresholdHigh * 1.5) {
+      atrScore = 30;
+      volatilityStatus = 'HIGH';
+    } else {
+      atrScore = 10;
+      volatilityStatus = 'EXTREME';
+    }
+    
+    totalScore += atrScore;
+    components.atr_contribution = atrScore;
+    components.atr_percentage = atrPercentage;
+  }
+  
+  // Bollinger Bands Width (40 points max)
+  const bbw_1h = safeFloat(scanData.bbw_1h);
+  
+  if (bbw_1h > 0) {
+    maxScore += 40;
+    let bbwScore = 0;
+    
+    if (bbw_1h <= 0.02) {
+      bbwScore = 25;
+    } else if (bbw_1h <= 0.05) {
+      bbwScore = 40;
+    } else if (bbw_1h <= 0.08) {
+      bbwScore = 30;
+    } else {
+      bbwScore = 15;
+    }
+    
+    totalScore += bbwScore;
+    components.bbw_contribution = bbwScore;
+  }
+  
+  // Calculate final score (0-100)
+  const finalScore = maxScore > 0 ? Math.round((totalScore / maxScore) * 100) : 0;
+  
+  return {
+    score: finalScore,
+    status: volatilityStatus,
+    components: components,
+    atr_percentage: atrPercentage,
+    tier_thresholds: {
+      low: atrThresholdLow,
+      high: atrThresholdHigh
+    }
+  };
+}
+
+// =====================================================
+// PROCESS EACH SYMBOL
+// =====================================================
+
+const results = inputData.map((item, index) => {
+  const data = item.json;
+  const scanData = getScanData(data);
+  
+  // ⚠️ Get tier from Supabase response (previous node)
+  const tier = parseInt(data.tier || 2);
+  
+  // Get tier-specific thresholds
+  let atrLow, atrHigh;
+  
+  if (tier === 1) {
+    atrLow = 3.0;
+    atrHigh = 6.0;
+  } else if (tier === 2) {
+    atrLow = 6.0;
+    atrHigh = 10.0;
+  } else {
+    atrLow = 10.0;
+    atrHigh = 15.0;
+  }
+  
+  if (index < 3) {
+    console.log(`\n--- ${data.symbol} (Tier ${tier}) ---`);
+    console.log(`  ATR Thresholds: ${atrLow}% - ${atrHigh}%`);
+  }
+  
+  const volatility = calculateVolatilityScore(scanData, tier, atrLow, atrHigh);
+  
+  if (index < 3) {
+    console.log(`  Volatility Score: ${volatility.score}/100 (${volatility.status})`);
+    console.log(`  ATR Percentage: ${volatility.atr_percentage.toFixed(2)}%`);
+  }
+  
+  return {
+    json: {
+      ...data, // ✅ Запазваме всички данни
+      
+      // Add volatility scoring
+      volatility_score: volatility.score,
+      volatility_status: volatility.status,
+      volatility_components: volatility.components,
+      atr_percentage: volatility.atr_percentage,
+      
+      // Metadata
+      volatility_scored_at: new Date().toISOString()
+    }
+  };
+});
+
+console.log(`\n✅ Volatility scoring complete for ${results.length} symbols`);
+
+const avgScore = results.reduce((sum, r) => sum + (r.json.volatility_score || 0), 0) / results.length;
+console.log(`📊 Average Volatility Score: ${avgScore.toFixed(1)}/100`);
+
+// Status distribution
+const statusCounts = {
+  LOW: results.filter(r => r.json.volatility_status === 'LOW').length,
+  NORMAL: results.filter(r => r.json.volatility_status === 'NORMAL').length,
+  OPTIMAL: results.filter(r => r.json.volatility_status === 'OPTIMAL').length,
+  HIGH: results.filter(r => r.json.volatility_status === 'HIGH').length,
+  EXTREME: results.filter(r => r.json.volatility_status === 'EXTREME').length,
+  UNKNOWN: results.filter(r => r.json.volatility_status === 'UNKNOWN').length
+};
+
+console.log(`\n📊 Volatility Status Distribution:`);
+Object.keys(statusCounts).forEach(status => {
+  if (statusCounts[status] > 0) {
+    console.log(`   ${status}: ${statusCounts[status]}`);
+  }
+});
+
+console.log('\n✅ Ready for MERGE');
+
+return results;
