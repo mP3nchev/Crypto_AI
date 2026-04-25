@@ -1,0 +1,197 @@
+// =====================================================
+// TAAPI RESPONSE PROCESSOR - 20 INDICATORS + TIME-SERIES
+// =====================================================
+
+console.log('=== PROCESSING TAAPI RESPONSES FOR TIME-SERIES ===');
+
+const allResults = [];
+
+// Get original requests to retrieve sma_20 and other metadata
+const originalRequests = $('Separation of Requests').all();
+console.log(`Found ${originalRequests.length} original requests for data matching`);
+
+for (let index = 0; index < items.length; index++) {
+  const item = items[index];
+  console.log(`\n--- Processing item ${index} ---`);
+  
+  // =====================================================
+  // FIND TAAPI ARRAY IN RESPONSE
+  // =====================================================
+  let taapiArray = null;
+  
+  if (item.json && typeof item.json === 'object') {
+    // Check all properties for TAAPI array
+    for (const key in item.json) {
+      const value = item.json[key];
+      console.log(`Checking property '${key}':`, typeof value, Array.isArray(value) ? `[array with ${value.length} items]` : '');
+      
+      // If it's an array with elements having 'id' property (TAAPI structure)
+      if (Array.isArray(value) && value.length > 0 && value[0].id) {
+        console.log(`Found TAAPI array in property '${key}'!`);
+        taapiArray = value;
+        break;
+      }
+    }
+  }
+  
+  if (!taapiArray) {
+    console.log(`✗ No TAAPI array found in item ${index}`);
+    continue;
+  }
+  
+  // =====================================================
+  // EXTRACT SYMBOL FROM TAAPI RESPONSE
+  // =====================================================
+  const firstIndicator = taapiArray[0];
+  const symbolFromResponse = firstIndicator.id.split('_')[0];
+  
+  console.log(`Processing ${symbolFromResponse} with ${taapiArray.length} indicators`);
+  
+  // =====================================================
+  // FIND MATCHING ORIGINAL REQUEST DATA
+  // =====================================================
+  const originalRequest = originalRequests.find(req => 
+    req.json.symbol === symbolFromResponse
+  );
+  
+  if (!originalRequest) {
+    console.log(`✗ Could not find original request data for ${symbolFromResponse}`);
+    continue;
+  }
+  
+  // Extract metadata from original request
+  const cycle_timestamp = originalRequest.json.cycle_timestamp;
+  const scan_cycle_id = originalRequest.json.scan_cycle_id;
+  const symbol = originalRequest.json.symbol;
+  const symbol_id = originalRequest.json.symbol_id;
+  const sma_20 = originalRequest.json.sma_20;
+  const original_scan_data = originalRequest.json.original_scan_data;
+  
+  console.log(`✓ Matched with original request:`);
+  console.log(`  Symbol ID: ${symbol_id}`);
+  console.log(`  SMA 20: ${sma_20 !== null && sma_20 !== undefined ? sma_20 : 'NOT FOUND'}`);
+  console.log(`  Cycle: ${scan_cycle_id}`);
+  
+  // =====================================================
+  // CREATE TIME-SERIES SCAN RESULT
+  // =====================================================
+  const scanResult = {
+    symbol_id: symbol_id,
+    symbol: symbol,
+    cycle_timestamp: cycle_timestamp,
+    scan_cycle_id: scan_cycle_id,
+    scan_time: new Date().toISOString(),
+    scan_date: new Date().toISOString().split('T')[0],
+    
+    // ✅ CRITICAL: Include SMA 20 from original request
+    sma_20: sma_20
+  };
+  
+  // =====================================================
+  // MAPPING 20 NEW INDICATORS
+  // =====================================================
+  taapiArray.forEach(indicator => {
+    if (!indicator.id || !indicator.id.includes('_')) return;
+    
+    const indicatorType = indicator.id.split('_').slice(1).join('_');
+    
+    switch(indicatorType) {
+      // 🔴 2h TIMEFRAME INDICATORS (9)
+      case 'rsi_2h': 
+        scanResult.rsi_2h = indicator.result?.value; 
+        break;
+      case 'macd_2h': 
+        scanResult.macd_value_2h = indicator.result?.valueMACD;
+        scanResult.macd_signal_2h = indicator.result?.valueMACDSignal;
+        scanResult.macd_histogram_2h = indicator.result?.valueMACDHist;
+        break;
+      case 'adx_2h': 
+        scanResult.adx_2h = indicator.result?.value; 
+        break;
+      case 'ema200_2h': 
+        scanResult.ema_200_2h = indicator.result?.value; 
+        break;
+      case 'stochrsi_2h':
+        scanResult.stochrsi_k_2h = indicator.result?.valueFastK; 
+        scanResult.stochrsi_d_2h = indicator.result?.valueFastD;
+        break;
+      case 'willr_2h': 
+        scanResult.willr_2h = indicator.result?.value; 
+        break;
+      case 'mfi_2h': 
+        scanResult.mfi_2h = indicator.result?.value; 
+        break;
+      case 'ema20_2h': 
+        scanResult.ema_20_2h = indicator.result?.value; 
+        break;
+      case 'ema50_2h': 
+        scanResult.ema_50_2h = indicator.result?.value; 
+        break;
+        
+      // 🟡 1h TIMEFRAME INDICATORS (9)
+      case 'rsi_1h': 
+        scanResult.rsi_1h = indicator.result?.value; 
+        break;
+      case 'macd_1h': 
+        scanResult.macd_value_1h = indicator.result?.valueMACD;
+        scanResult.macd_signal_1h = indicator.result?.valueMACDSignal;
+        scanResult.macd_histogram_1h = indicator.result?.valueMACDHist;
+        break;
+      case 'vwap_1h': 
+        scanResult.vwap_1h = indicator.result?.value; 
+        break;
+      case 'obv_1h': 
+        scanResult.obv_1h = indicator.result?.value; 
+        break;
+      case 'atr_1h': 
+        scanResult.atr_1h = indicator.result?.value; 
+        break;
+      case 'bbw_1h': 
+        scanResult.bbw_1h = indicator.result?.value; 
+        break;
+      case 'ema20_1h': 
+        scanResult.ema_20_1h = indicator.result?.value; 
+        break;
+      case 'ema50_1h': 
+        scanResult.ema_50_1h = indicator.result?.value; 
+        break;
+      case 'stochrsi_1h':
+        scanResult.stochrsi_k_1h = indicator.result?.valueFastK; 
+        scanResult.stochrsi_d_1h = indicator.result?.valueFastD;
+        break;
+        
+      // 🟢 15m TIMEFRAME INDICATORS (2)
+      case 'willr_15m': 
+        scanResult.willr_15m = indicator.result?.value; 
+        break;
+      case 'rsi_15m': 
+        scanResult.rsi_15m = indicator.result?.value; 
+        break;
+        
+      default:
+        console.log(`Unknown indicator: ${indicatorType}`);
+    }
+  });
+  
+  // =====================================================
+  // ADD TO RESULTS
+  // =====================================================
+  allResults.push({ json: scanResult });
+  console.log(`✅ Successfully processed ${symbol} for cycle ${scan_cycle_id} (SMA_20: ${sma_20})`);
+}
+
+// =====================================================
+// FINAL OUTPUT
+// =====================================================
+console.log(`\n🎯 SUMMARY:`);
+console.log(`📊 Total symbols processed: ${allResults.length}`);
+console.log(`📅 Cycle tracking: ${allResults[0]?.json?.scan_cycle_id || 'N/A'}`);
+console.log(`🔢 Indicators per symbol: 20 (2h:9 + 1h:9 + 15m:2)`);
+console.log(`📈 SMA 20 included in ${allResults.filter(r => r.json.sma_20 !== null && r.json.sma_20 !== undefined).length} results`);
+
+if (allResults.length === 0) {
+  console.log('⚠️ WARNING: No results processed!');
+  return [{ json: { error: 'No TAAPI data processed' } }];
+}
+
+return allResults;
