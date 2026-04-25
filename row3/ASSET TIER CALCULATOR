@@ -1,0 +1,90 @@
+// =====================================================
+// BRANCH 1.1: ASSET TIER CALCULATOR
+// Определя tier на база rank_position (1-10, 11-40, 41+)
+// =====================================================
+
+console.log('🎯 === ASSET TIER CALCULATOR START ===');
+
+const scanResults = $input.all();
+console.log(`Processing ${scanResults.length} symbols for tier classification`);
+
+// =====================================================
+// TIER CONFIGURATION (FIXED: Кратки имена)
+// =====================================================
+
+const TIER_CONFIG = {
+  1: { name: 'Tier 1', rank_range: [1, 10], atr_low: 3, atr_high: 6 },
+  2: { name: 'Tier 2', rank_range: [11, 40], atr_low: 6, atr_high: 10 },
+  3: { name: 'Tier 3', rank_range: [41, 150], atr_low: 10, atr_high: 15 }
+};
+
+// =====================================================
+// TIER ASSIGNMENT LOGIC
+// =====================================================
+
+function assignTier(rankPosition) {
+  const rank = parseInt(rankPosition) || 999;
+  
+  if (rank >= 1 && rank <= 10) return 1;
+  if (rank >= 11 && rank <= 40) return 2;
+  return 3;
+}
+
+// =====================================================
+// PROCESS EACH SYMBOL
+// =====================================================
+
+const processedResults = scanResults.map(item => {
+  const data = item.json;
+  const rankPosition = parseInt(data.rank_position) || 999;
+  const tier = assignTier(rankPosition);
+  const tierConfig = TIER_CONFIG[tier];
+  
+  console.log(`${data.symbol}: Rank ${rankPosition} → Tier ${tier} (${tierConfig.name})`);
+  
+  return {
+    json: {
+      ...data,
+      
+      // Tier информация (FIXED: Кратки имена)
+      tier: tier,
+      tier_name: tierConfig.name,  // ✅ Сега е 'Tier 1' вместо 'Tier 1 (Major)'
+      atr_threshold_low: tierConfig.atr_low,
+      atr_threshold_high: tierConfig.atr_high,
+      
+      // Metadata
+      tier_assigned_at: new Date().toISOString()
+    }
+  };
+});
+
+// =====================================================
+// SUMMARY STATISTICS
+// =====================================================
+
+const tierCounts = processedResults.reduce((acc, item) => {
+  const tier = item.json.tier;
+  acc[tier] = (acc[tier] || 0) + 1;
+  return acc;
+}, {});
+
+console.log(`\n🎯 === TIER CLASSIFICATION SUMMARY ===`);
+console.log(`📊 Total symbols processed: ${processedResults.length}`);
+console.log(`🥇 Tier 1 (Major): ${tierCounts[1] || 0} symbols`);
+console.log(`🥈 Tier 2 (Large Alt): ${tierCounts[2] || 0} symbols`);
+console.log(`🥉 Tier 3 (Small Alt): ${tierCounts[3] || 0} symbols`);
+console.log(`🔄 Cycle: ${processedResults[0]?.json?.scan_cycle_id || 'N/A'}`);
+
+if (processedResults.length === 0) {
+  console.error('❌ ERROR: No symbols processed for tier classification');
+  return [{
+    json: {
+      error: 'No symbols processed for tier classification',
+      total_input: scanResults.length
+    }
+  }];
+}
+
+console.log('\n✅ Ready for Node 1.2: ATR Volatility Analyzer');
+
+return processedResults;
