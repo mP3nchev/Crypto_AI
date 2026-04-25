@@ -1,0 +1,83 @@
+// DEBUG + DE-DUPLICATION
+console.log('=== Checking for duplicates ===');
+
+const allCandles = $input.all();
+console.log('Total input items: ' + allCandles.length);
+
+// Check for duplicate symbol+interval combinations
+const symbolIntervalCount = new Map();
+allCandles.forEach(item => {
+  const key = item.json.symbol + '|' + item.json.interval;
+  symbolIntervalCount.set(key, (symbolIntervalCount.get(key) || 0) + 1);
+});
+
+const dupes = Array.from(symbolIntervalCount.entries()).filter(([k, count]) => count > 1);
+if (dupes.length > 0) {
+  console.log('DUPLICATES FOUND IN INPUT:');
+  dupes.forEach(([key, count]) => console.log('  ' + key + ': ' + count + ' records'));
+} else {
+  console.log('No duplicate symbol+interval combinations');
+}
+
+// DE-DUPLICATION
+const validCandles = [];
+const seenKeys = new Set();
+
+allCandles.forEach((item) => {
+  const candle = item.json;
+  
+  if (candle.error) return;
+  if (!candle.symbol || candle.symbol === 'UNKNOWN') return;
+  if (!candle.interval || !candle.cycle_timestamp || !candle.scan_cycle_id || !candle.timestamp) return;
+  if (typeof candle.open_price !== 'number' || isNaN(candle.open_price)) return;
+  if (typeof candle.high_price !== 'number' || isNaN(candle.high_price)) return;
+  if (typeof candle.low_price !== 'number' || isNaN(candle.low_price)) return;
+  if (typeof candle.close_price !== 'number' || isNaN(candle.close_price)) return;
+  if (typeof candle.volume !== 'number' || isNaN(candle.volume)) return;
+  
+  const uniqueKey = candle.symbol + '|' + candle.interval + '|' + candle.timestamp;
+  
+  if (seenKeys.has(uniqueKey)) {
+    console.log('Skipping duplicate: ' + uniqueKey);
+    return;
+  }
+  
+  seenKeys.add(uniqueKey);
+  
+  validCandles.push({
+    json: {
+      symbol: candle.symbol,
+      interval: candle.interval,
+      cycle_timestamp: candle.cycle_timestamp,
+      scan_cycle_id: candle.scan_cycle_id,
+      timestamp: candle.timestamp,
+      open_time: candle.open_time,
+      close_time: candle.close_time,
+      open_price: candle.open_price,
+      high_price: candle.high_price,
+      low_price: candle.low_price,
+      close_price: candle.close_price,
+      volume: candle.volume,
+    }
+  });
+});
+
+console.log('Valid records: ' + validCandles.length);
+console.log('Duplicates removed: ' + (allCandles.length - validCandles.length));
+
+// ✅ NEW: Log how many have median volume
+const withMedian = validCandles.filter(v => v.json.median_volume_2h > 0).length;
+console.log('Records with median_volume_2h: ' + withMedian);
+
+if (validCandles.length === 0) {
+  return [];
+}
+
+const candlesArray = validCandles.map(item => item.json);
+
+return [{
+  json: {
+    candles_array: candlesArray,
+    total_count: candlesArray.length
+  }
+}];
