@@ -1,0 +1,169 @@
+// =====================================================
+// BINANCE CANDLE PROCESSOR v2.0
+// Added: Real median_volume_1h from 12 × 1h candles
+// Removed: Estimation formula
+// =====================================================
+
+console.log("📈 === CANDLE PROCESSOR WITH MEDIAN VOLUME START ===");
+
+// =====================================================
+// HELPER FUNCTION: Calculate Median Volume
+// =====================================================
+function calculateMedianVolume(candles, symbol, interval) {
+  if (!candles || candles.length === 0) return 0;
+  
+  // Extract volumes from candles
+  const volumes = candles
+    .map(candle => {
+      // Binance format: [openTime, open, high, low, close, volume, closeTime]
+      if (Array.isArray(candle)) {
+        return parseFloat(candle[5] || 0);  // volume is at index 5
+      }
+      return parseFloat(candle.volume || 0);
+    })
+    .filter(v => v > 0);  // Remove zeros/invalid values
+  
+  if (volumes.length === 0) {
+    console.log(`  ⚠️ ${symbol}_${interval}: No valid volumes found`);
+    return 0;
+  }
+  
+  // Sort volumes ascending
+  const sorted = [...volumes].sort((a, b) => a - b);
+  
+  // Calculate median
+  const mid = Math.floor(sorted.length / 2);
+  const median = sorted.length % 2 === 0
+    ? (sorted[mid - 1] + sorted[mid]) / 2  // Even: average of two middle values
+    : sorted[mid];  // Odd: middle value
+  
+  console.log(`  📊 ${symbol}_${interval}: Median Volume = ${median.toFixed(2)} (from ${sorted.length} candles)`);
+  
+  return median;
+}
+
+// =====================================================
+// MAIN PROCESSING
+// =====================================================
+const groupedRequests = $input.all();
+console.log(`📈 Processing ${groupedRequests.length} grouped requests`);
+
+// =====================================================
+// STEP 1: Calculate Median Volume for 1h (NEW!)
+// =====================================================
+const medianVolumeMap_1h = new Map();  // Store median per symbol
+
+groupedRequests.forEach(requestGroup => {
+  const data = requestGroup.json;
+  const symbol = data.symbol;
+  const interval = data.interval;
+  const candles = data.candles;
+  
+  // ✅ Calculate median ONLY for 1h candles (12 candles = 12 hours)
+  if (interval === '1h' && candles && candles.length >= 6) {  // Need at least 6 candles
+    const median = calculateMedianVolume(candles, symbol, interval);
+    
+    if (median > 0) {
+      medianVolumeMap_1h.set(symbol, median);
+      console.log(`  ✅ ${symbol}: Stored median 1h volume = ${median.toFixed(2)}`);
+    }
+  }
+});
+
+console.log(`\n📊 Calculated median_volume_1h for ${medianVolumeMap_1h.size} symbols`);
+
+// =====================================================
+// STEP 2: Calculate Median Volume for 2h (Backward Compatibility)
+// =====================================================
+const medianVolumeMap_2h = new Map();
+
+groupedRequests.forEach(requestGroup => {
+  const data = requestGroup.json;
+  const symbol = data.symbol;
+  const interval = data.interval;
+  const candles = data.candles;
+  
+  // Calculate median for 2h candles (20 candles = 40 hours)
+  if (interval === '2h' && candles && candles.length >= 10) {
+    const median = calculateMedianVolume(candles, symbol, interval);
+    
+    if (median > 0) {
+      medianVolumeMap_2h.set(symbol, median);
+      console.log(`  ✅ ${symbol}: Stored median 2h volume = ${median.toFixed(2)}`);
+    }
+  }
+});
+
+console.log(`\n📊 Calculated median_volume_2h for ${medianVolumeMap_2h.size} symbols`);
+
+// =====================================================
+// STEP 3: Process Individual Candles & Attach Median
+// =====================================================
+const processedCandles = [];
+
+groupedRequests.forEach((requestGroup, requestIndex) => {
+  const data = requestGroup.json;
+  
+  const symbol = data.symbol;
+  const symbol_id = data.symbol_id;
+  const interval = data.interval;
+  const cycle_timestamp = data.cycle_timestamp;
+  const scan_cycle_id = data.scan_cycle_id;
+  const candles = data.candles;
+  
+  if (!candles || candles.length === 0) {
+    console.log(`  ⚠️ Request ${requestIndex}: No candles for ${symbol}_${interval}`);
+    return;
+  }
+  
+  // Get medians for this symbol
+  const median_1h = medianVolumeMap_1h.get(symbol) || 0;
+  const median_2h = medianVolumeMap_2h.get(symbol) || 0;
+  
+  // Process each candle in the group
+  candles.forEach(candle => {
+    let candleData;
+    
+    // Parse Binance format
+    if (Array.isArray(candle)) {
+      candleData = {
+        open_time: candle[0],
+        close_time: candle[6],
+        timestamp: new Date(candle[0]).toISOString(),
+        open_price: parseFloat(candle[1]),
+        high_price: parseFloat(candle[2]),
+        low_price: parseFloat(candle[3]),
+        close_price: parseFloat(candle[4]),
+        volume: parseFloat(candle[5])
+      };
+    } else {
+      candleData = candle;
+    }
+    
+    // Add to processed candles with median volumes attached
+    processedCandles.push({
+      json: {
+        symbol: symbol,
+        symbol_id: symbol_id,
+        interval: interval,
+        cycle_timestamp: cycle_timestamp,
+        scan_cycle_id: scan_cycle_id,
+        
+        // Candle data
+        ...candleData,
+        
+        // ✅ Attach median volumes
+        median_volume_1h: median_1h,  // NEW!
+        median_volume_2h: median_2h,  // For backward compatibility
+        
+        processed_at: new Date().toISOString()
+      }
+    });
+  });
+});
+
+console.log(`\n✅ Processed ${processedCandles.length} individual candles`);
+console.log(`📊 Symbols with median_volume_1h: ${medianVolumeMap_1h.size}`);
+console.log(`📊 Symbols with median_volume_2h: ${medianVolumeMap_2h.size}`);
+
+return processedCandles;
