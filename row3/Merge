@@ -1,0 +1,127 @@
+SELECT 
+  -- =====================================================
+  -- BASE IDENTIFICATION
+  -- =====================================================
+  COALESCE(input1.symbol, input2.symbol, input3.symbol, input4.symbol, input5.symbol) as symbol,
+  COALESCE(input1.symbol_id, input2.symbol_id, input3.symbol_id, input4.symbol_id, input5.symbol_id) as symbol_id,
+  COALESCE(input1.scan_cycle_id, input2.scan_cycle_id, input3.scan_cycle_id, input4.scan_cycle_id, input5.scan_cycle_id) as scan_cycle_id,
+  COALESCE(input1.cycle_timestamp, input2.cycle_timestamp, input3.cycle_timestamp, input4.cycle_timestamp, input5.cycle_timestamp) as cycle_timestamp,
+  
+  -- =====================================================
+  -- TIER CLASSIFICATION
+  -- =====================================================
+  COALESCE(input1.tier, input2.tier, input3.tier, input4.tier, input5.tier) as tier,
+  COALESCE(input1.tier_name, input2.tier_name, input3.tier_name, input4.tier_name, input5.tier_name) as tier_name,
+  COALESCE(input1.rank_position, input2.rank_position, input3.rank_position, input4.rank_position, input5.rank_position) as rank_position,
+  COALESCE(input1.atr_threshold_low, input2.atr_threshold_low, input3.atr_threshold_low, input4.atr_threshold_low, input5.atr_threshold_low) as atr_threshold_low,
+  COALESCE(input1.atr_threshold_high, input2.atr_threshold_high, input3.atr_threshold_high, input4.atr_threshold_high, input5.atr_threshold_high) as atr_threshold_high,
+  
+  -- =====================================================
+  -- VOLATILITY METADATA
+  -- =====================================================
+  input1.current_atr_1h,
+  input1.atr_percentage_1h,
+  input1.volatility_status,
+  input1.volatility_warning,
+  input1.risk_level,
+  input1.max_suggested_leverage,
+  
+  -- =====================================================
+  -- PRICE DATA
+  -- =====================================================
+  COALESCE(input1.close_price, input2.close_price, input3.close_price, input4.close_price, input5.close_price) as close_price,
+  COALESCE(input1.open_price, input2.open_price, input3.open_price, input4.open_price, input5.open_price) as open_price,
+  COALESCE(input1.high_price, input2.high_price, input3.high_price, input4.high_price, input5.high_price) as high_price,
+  COALESCE(input1.low_price, input2.low_price, input3.low_price, input4.low_price, input5.low_price) as low_price,
+  
+  -- ✅ NEW: LATEST 1M PRICE
+  COALESCE(input1.latest_1m_price, input2.latest_1m_price, input3.latest_1m_price, input4.latest_1m_price, input5.latest_1m_price) as latest_1m_price,
+  
+  -- =====================================================
+  -- TAAPI INDICATORS (2h)
+  -- =====================================================
+  COALESCE(input1.rsi_2h, input2.rsi_2h, input3.rsi_2h, input4.rsi_2h, input5.rsi_2h) as rsi_2h,
+  COALESCE(input1.adx_2h, input2.adx_2h, input3.adx_2h, input4.adx_2h, input5.adx_2h) as adx_2h,
+  COALESCE(input1.macd_value_2h, input2.macd_value_2h, input3.macd_value_2h, input4.macd_value_2h, input5.macd_value_2h) as macd_value_2h,
+  COALESCE(input1.macd_signal_2h, input2.macd_signal_2h, input3.macd_signal_2h, input4.macd_signal_2h, input5.macd_signal_2h) as macd_signal_2h,
+  COALESCE(input1.macd_histogram_2h, input2.macd_histogram_2h, input3.macd_histogram_2h, input4.macd_histogram_2h, input5.macd_histogram_2h) as macd_histogram_2h,
+  COALESCE(input1.ema_200_2h, input2.ema_200_2h, input3.ema_200_2h, input4.ema_200_2h, input5.ema_200_2h) as ema_200_2h,
+  COALESCE(input1.ema_20_2h, input2.ema_20_2h, input3.ema_20_2h, input4.ema_20_2h, input5.ema_20_2h) as ema_20_2h,
+  COALESCE(input1.ema_50_2h, input2.ema_50_2h, input3.ema_50_2h, input4.ema_50_2h, input5.ema_50_2h) as ema_50_2h,
+  COALESCE(input1.stochrsi_k_2h, input2.stochrsi_k_2h, input3.stochrsi_k_2h, input4.stochrsi_k_2h, input5.stochrsi_k_2h) as stochrsi_k_2h,
+  COALESCE(input1.stochrsi_d_2h, input2.stochrsi_d_2h, input3.stochrsi_d_2h, input4.stochrsi_d_2h, input5.stochrsi_d_2h) as stochrsi_d_2h,
+  COALESCE(input1.willr_2h, input2.willr_2h, input3.willr_2h, input4.willr_2h, input5.willr_2h) as willr_2h,
+  COALESCE(input1.mfi_2h, input2.mfi_2h, input3.mfi_2h, input4.mfi_2h, input5.mfi_2h) as mfi_2h,
+  
+  -- =====================================================
+  -- TAAPI INDICATORS (1h)
+  -- =====================================================
+  COALESCE(input1.rsi_1h, input2.rsi_1h, input3.rsi_1h, input4.rsi_1h, input5.rsi_1h) as rsi_1h,
+  COALESCE(input1.atr_1h, input2.atr_1h, input3.atr_1h, input4.atr_1h, input5.atr_1h) as atr_1h,
+  COALESCE(input1.bbw_1h, input2.bbw_1h, input3.bbw_1h, input4.bbw_1h, input5.bbw_1h) as bbw_1h,
+  COALESCE(input1.vwap_1h, input2.vwap_1h, input3.vwap_1h, input4.vwap_1h, input5.vwap_1h) as vwap_1h,
+  COALESCE(input1.obv_1h, input2.obv_1h, input3.obv_1h, input4.obv_1h, input5.obv_1h) as obv_1h,
+  COALESCE(input1.ema_20_1h, input2.ema_20_1h, input3.ema_20_1h, input4.ema_20_1h, input5.ema_20_1h) as ema_20_1h,
+  COALESCE(input1.ema_50_1h, input2.ema_50_1h, input3.ema_50_1h, input4.ema_50_1h, input5.ema_50_1h) as ema_50_1h,
+  COALESCE(input1.stochrsi_k_1h, input2.stochrsi_k_1h, input3.stochrsi_k_1h, input4.stochrsi_k_1h, input5.stochrsi_k_1h) as stochrsi_k_1h,
+  COALESCE(input1.stochrsi_d_1h, input2.stochrsi_d_1h, input3.stochrsi_d_1h, input4.stochrsi_d_1h, input5.stochrsi_d_1h) as stochrsi_d_1h,
+  
+  -- =====================================================
+  -- TAAPI INDICATORS (15m)
+  -- =====================================================
+  COALESCE(input1.rsi_15m, input2.rsi_15m, input3.rsi_15m, input4.rsi_15m, input5.rsi_15m) as rsi_15m,
+  COALESCE(input1.willr_15m, input2.willr_15m, input3.willr_15m, input4.willr_15m, input5.willr_15m) as willr_15m,
+  
+  -- =====================================================
+  -- SMA
+  -- =====================================================
+  COALESCE(input1.sma_20, input2.sma_20, input3.sma_20, input4.sma_20, input5.sma_20) as sma_20,
+  
+  -- =====================================================
+  -- VOLUME DATA
+  -- =====================================================
+  COALESCE(input1.cs_volume, input2.cs_volume, input3.cs_volume, input4.cs_volume, input5.cs_volume) as cs_volume,
+  COALESCE(input1.quote_volume, input2.quote_volume, input3.quote_volume, input4.quote_volume, input5.quote_volume) as quote_volume,
+  COALESCE(input1.candle_volume, input2.candle_volume, input3.candle_volume, input4.candle_volume, input5.candle_volume) as candle_volume,
+  
+  -- ✅ NEW: MEDIAN VOLUMES
+  COALESCE(input1.median_volume_1h, input2.median_volume_1h, input3.median_volume_1h, input4.median_volume_1h, input5.median_volume_1h) as median_volume_1h,
+  COALESCE(input1.median_volume_2h, input2.median_volume_2h, input3.median_volume_2h, input4.median_volume_2h, input5.median_volume_2h) as median_volume_2h,
+  
+  -- =====================================================
+  -- MARKET CONDITION
+  -- =====================================================
+  input2.market_condition,
+  input2.adx_strength,
+  
+  -- =====================================================
+  -- ADAPTIVE WEIGHTS
+  -- =====================================================
+  input2.weight_momentum,
+  input2.weight_trend,
+  input2.weight_volatility,
+  input2.weight_volume,
+  input2.weight_price_action,
+  input2.weight_risk_reward,
+  
+  -- =====================================================
+  -- COMPONENT SCORES
+  -- =====================================================
+  input1.volatility_score,
+  input3.momentum_score,
+  input3.momentum_components,
+  input4.trend_score,
+  input4.trend_components,
+  input4.trend_direction,
+  input5.volume_score,
+  input5.volume_penalty,
+  input5.volume_ratio,
+  input5.volume_status,
+  input5.price_action_score,
+  input5.price_structure
+
+FROM input1
+LEFT JOIN input2 ON input1.symbol = input2.symbol
+LEFT JOIN input3 ON input1.symbol = input3.symbol
+LEFT JOIN input4 ON input1.symbol = input4.symbol
+LEFT JOIN input5 ON input1.symbol = input5.symbol
