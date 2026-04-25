@@ -1,0 +1,89 @@
+// =====================================================
+// BINANCE CANDLE BULK REQUESTS GENERATOR v2.0
+// Creates 4 separate requests per symbol (2h, 1h, 15m, 1m)
+// Added: 1h with limit:12 for median calculation
+// Added: 1m with limit:1 for latest price
+// =====================================================
+
+const symbols = $input.all();
+const allRequests = [];
+
+// =====================================================
+// CYCLE TRACKING
+// =====================================================
+const now = new Date();
+const cycle_timestamp = now.toISOString();
+const year = String(now.getFullYear());
+const month = String(now.getMonth() + 1).padStart(2, '0');
+const day = String(now.getDate()).padStart(2, '0');
+const hour = String(now.getHours()).padStart(2, '0');
+const minute = String(now.getMinutes()).padStart(2, '0');
+const scan_cycle_id = `${year}-${month}-${day}_${hour}:${minute}`;
+
+console.log(`📈 Starting Binance candle requests for cycle: ${scan_cycle_id}`);
+
+// =====================================================
+// TIMEFRAMES & LIMITS
+// =====================================================
+const requestGroups = [
+    // GROUP 1: 2h candles (20 candles = 40h history) for backward compatibility
+    { name: 'Candles_2h', interval: '2h', limit: 20 },
+    
+    // GROUP 2: 1h candles (12 candles = 12h history) ✅ NEW: For median_volume_1h
+    { name: 'Candles_1h_Median', interval: '1h', limit: 12 },
+    
+    // GROUP 3: 15m candles (1 candle for momentum)
+    { name: 'Candles_15m', interval: '15m', limit: 1 },
+    
+    // GROUP 4: 1m candles (1 candle for latest price) ✅ NEW: For real-time price
+    { name: 'Candles_1m', interval: '1m', limit: 1 }
+];
+
+// =====================================================
+// GENERATE ALL REQUESTS
+// =====================================================
+requestGroups.forEach(group => {
+    symbols.forEach((symbolItem, symbolIndex) => {
+        allRequests.push({
+            symbol: symbolItem.json.symbol,
+            interval: group.interval,
+            limit: group.limit,
+            groupName: group.name,
+            requestIndex: allRequests.length,
+            cycle_timestamp: cycle_timestamp,
+            scan_cycle_id: scan_cycle_id,
+            symbol_id: symbolItem.json.id || null
+        });
+    });
+});
+
+console.log("🎯 Generated", allRequests.length, "total candle requests (4 per symbol).");
+console.log("⏱️ Cycle:", scan_cycle_id);
+
+// =====================================================
+// 🔍 DEBUG: SAMPLE REQUESTS
+// =====================================================
+console.log("\n🔍 DEBUG: First 8 requests (2 symbols × 4 intervals):");
+allRequests.slice(0, 8).forEach((req, i) => {
+  console.log(`  ${i+1}. ${req.symbol}_${req.interval}: limit=${req.limit}, groupName=${req.groupName}`);
+});
+
+// Count by interval
+const countByInterval = {};
+allRequests.forEach(req => {
+  countByInterval[req.interval] = (countByInterval[req.interval] || 0) + 1;
+});
+
+console.log("\n📊 Requests by interval:");
+Object.entries(countByInterval).forEach(([interval, count]) => {
+  console.log(`  ${interval}: ${count} requests`);
+});
+
+console.log("\n💡 Key changes:");
+console.log("  ✅ 1h candles: limit changed from 1 → 12 (for median calculation)");
+console.log("  ✅ 1m candles: newly added (for latest price)");
+
+// =====================================================
+// RETURN
+// =====================================================
+return allRequests.map(req => ({ json: req }));
