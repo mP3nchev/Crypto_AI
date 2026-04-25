@@ -1,0 +1,42 @@
+// =====================================================
+// COOLDOWN AFTER BATCH 6 - TAAPI SERVER PROTECTION
+// =====================================================
+
+const batchIndex = $('Loop Over Items1').context.currentRunIndex || 0;
+const totalBatches = Math.ceil($('Separation of Requests').all().length / 2);
+
+console.log(`🔄 Processing Batch ${batchIndex + 1} of ${totalBatches}`);
+
+// =====================================================
+// INJECT COOLDOWN AFTER BATCH 6
+// =====================================================
+if (batchIndex === 6) {
+  console.log('🛑 === COOLDOWN TRIGGERED AFTER BATCH 6 ===');
+  console.log('⏰ Waiting 30 seconds to reset TAAPI server state...');
+  console.log('💡 This prevents the "batch 7 curse" timeout issue');
+  
+  return new Promise(resolve => {
+    setTimeout(() => {
+      console.log('✅ Cooldown complete - resuming processing');
+      resolve($input.all());
+    }, 30000); // 30 seconds cooldown
+  });
+}
+
+// =====================================================
+// SECONDARY COOLDOWN AFTER BATCH 12 (if applicable)
+// =====================================================
+if (batchIndex === 12) {
+  console.log('🛑 === SECONDARY COOLDOWN AFTER BATCH 12 ===');
+  console.log('⏰ Waiting 20 seconds...');
+  
+  return new Promise(resolve => {
+    setTimeout(() => {
+      console.log('✅ Secondary cooldown complete');
+      resolve($input.all());
+    }, 20000); // 20 seconds
+  });
+}
+
+// Normal flow - no cooldown
+return $input.all();
