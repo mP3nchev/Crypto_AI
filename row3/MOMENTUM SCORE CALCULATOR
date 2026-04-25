@@ -1,0 +1,135 @@
+// =====================================================
+// BRANCH 3: MOMENTUM SCORE CALCULATOR
+// =====================================================
+
+console.log('📈 === MOMENTUM SCORE CALCULATOR START ===');
+
+const inputData = $input.all();
+console.log(`Calculating momentum scores for ${inputData.length} symbols`);
+
+// =====================================================
+// MOMENTUM SCORING LOGIC
+// =====================================================
+
+function calculateMomentumScore(scanData) {
+  let totalScore = 0;
+  let maxScore = 0;
+  
+  // RSI Multi-Timeframe (40 points max)
+  const rsi_2h = parseFloat(scanData.rsi_2h);
+  const rsi_1h = parseFloat(scanData.rsi_1h);
+  const rsi_15m = parseFloat(scanData.rsi_15m);
+  
+  if (!isNaN(rsi_2h) && !isNaN(rsi_1h)) {
+    maxScore += 40;
+    
+    // Check alignment (both bullish or both bearish)
+    const bullish_2h = rsi_2h > 50;
+    const bullish_1h = rsi_1h > 50;
+    
+    if (bullish_2h === bullish_1h) {
+      // Aligned - score based on strength
+      if (bullish_2h) {
+        // Bullish momentum: higher RSI = better (up to 60)
+        const avg_rsi = (rsi_2h + rsi_1h) / 2;
+        if (avg_rsi >= 60) totalScore += 40;
+        else if (avg_rsi >= 55) totalScore += 30;
+        else totalScore += 20;
+      } else {
+        // Bearish momentum: lower RSI = stronger bearish
+        const avg_rsi = (rsi_2h + rsi_1h) / 2;
+        if (avg_rsi <= 40) totalScore += 40;
+        else if (avg_rsi <= 45) totalScore += 30;
+        else totalScore += 20;
+      }
+    } else {
+      // Conflicting signals = weak momentum
+      totalScore += 5;
+    }
+  }
+  
+  // StochRSI (30 points max)
+  const stoch_k_2h = parseFloat(scanData.stochrsi_k_2h);
+  const stoch_k_1h = parseFloat(scanData.stochrsi_k_1h);
+  
+  if (!isNaN(stoch_k_2h) && !isNaN(stoch_k_1h)) {
+    maxScore += 30;
+    
+    // Overbought/Oversold zones
+    const bullish_stoch = stoch_k_1h > 20 && stoch_k_1h < 80;
+    const extreme_bullish = stoch_k_1h >= 80;
+    const extreme_bearish = stoch_k_1h <= 20;
+    
+    if (bullish_stoch) {
+      totalScore += 30; // Healthy range
+    } else if (extreme_bullish) {
+      totalScore += 15; // Overbought warning
+    } else if (extreme_bearish) {
+      totalScore += 10; // Oversold warning
+    }
+  }
+  
+  // Williams %R (30 points max)
+  const willr_2h = parseFloat(scanData.willr_2h);
+  const willr_15m = parseFloat(scanData.willr_15m);
+  
+  if (!isNaN(willr_2h)) {
+    maxScore += 30;
+    
+    // WillR ranges from -100 to 0
+    if (willr_2h >= -20) {
+      totalScore += 10; // Overbought
+    } else if (willr_2h >= -50) {
+      totalScore += 30; // Strong momentum
+    } else if (willr_2h >= -80) {
+      totalScore += 20; // Moderate
+    } else {
+      totalScore += 10; // Oversold
+    }
+  }
+  
+  // Calculate final score (0-100)
+  const finalScore = maxScore > 0 ? Math.round((totalScore / maxScore) * 100) : 0;
+  
+  return {
+    score: finalScore,
+    components: {
+      rsi_contribution: maxScore >= 40 ? Math.round((totalScore / maxScore) * 40) : 0,
+      stochrsi_contribution: maxScore >= 30 ? 30 : 0,
+      willr_contribution: maxScore >= 30 ? 30 : 0
+    }
+  };
+}
+
+// =====================================================
+// PROCESS EACH SYMBOL
+// =====================================================
+
+const results = inputData.map(item => {
+  const data = item.json;
+  const scanData = data.scan_data || data; // ✅ Support both structures
+  
+  console.log(`\n--- ${data.symbol} ---`);
+  
+  const momentum = calculateMomentumScore(scanData);
+  
+  console.log(`Momentum Score: ${momentum.score}/100`);
+  
+  return {
+    json: {
+      ...data, // ✅ Запазваме всички данни
+      momentum_score: momentum.score,
+      momentum_components: momentum.components,
+      scored_at: new Date().toISOString()
+    }
+  };
+});
+
+console.log(`\n✅ Momentum scoring complete for ${results.length} symbols`);
+
+const avgScore = results.reduce((sum, r) => sum + (r.json.momentum_score || 0), 0) / results.length;
+console.log(`📊 Average Momentum Score: ${avgScore.toFixed(1)}/100`);
+
+console.log('\n✅ Ready for MERGE');
+
+return results;
