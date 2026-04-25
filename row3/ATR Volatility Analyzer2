@@ -1,0 +1,167 @@
+// =====================================================
+// BRANCH 1.2: ATR VOLATILITY ANALYZER
+// Изчислява volatility_score на база tier и ATR
+// =====================================================
+
+console.log('📊 === ATR VOLATILITY ANALYZER START ===');
+
+const tierResults = $input.all();
+console.log(`Analyzing ${tierResults.length} symbols`);
+
+// =====================================================
+// HELPER FUNCTIONS
+// =====================================================
+
+function safeFloat(value, fieldName = 'unknown') {
+  const result = parseFloat(value);
+  if (isNaN(result)) {
+    console.log(`⚠️ WARNING: ${fieldName} is NaN (original value: ${value})`);
+    return 0;
+  }
+  return result;
+}
+
+function calculateATRPercentage(atrValue, currentPrice, symbol) {
+  console.log(`  Calculating for ${symbol}: atr=${atrValue}, price=${currentPrice}`);
+  
+  if (!atrValue || atrValue === 0) {
+    console.log(`  ❌ ATR is 0 or falsy`);
+    return 0;
+  }
+  if (!currentPrice || currentPrice === 0) {
+    console.log(`  ❌ Price is 0 or falsy`);
+    return 0;
+  }
+  
+  const percentage = (atrValue / currentPrice) * 100;
+  console.log(`  ✅ Result: ${percentage.toFixed(4)}%`);
+  return percentage;
+}
+
+// =====================================================
+// PROCESS EACH SYMBOL
+// =====================================================
+
+const processedResults = tierResults.map(item => {
+  const data = item.json;
+  
+  console.log(`\n--- ${data.symbol} ---`);
+  console.log(`  Input atr_1h: ${data.atr_1h}`);
+  console.log(`  Input close_price: ${data.close_price}`);
+  
+  // =====================================================
+  // EXTRACT & VALIDATE DATA
+  // =====================================================
+  
+  const atr1h = safeFloat(data.atr_1h, 'atr_1h');
+  const closePrice = safeFloat(data.close_price, 'close_price');
+  
+  console.log(`  Parsed atr_1h: ${atr1h}`);
+  console.log(`  Parsed close_price: ${closePrice}`);
+  
+  const atrPercentage1h = calculateATRPercentage(atr1h, closePrice, data.symbol);
+  
+  // =====================================================
+  // GET TIER THRESHOLDS
+  // =====================================================
+  
+  const tier = data.tier || 3;
+  const thresholdLow = data.atr_threshold_low || 10;
+  const thresholdHigh = data.atr_threshold_high || 15;
+  
+  // =====================================================
+  // VOLATILITY CLASSIFICATION
+  // =====================================================
+  
+  let volatilityStatus = 'UNKNOWN';
+  let volatilityScore = 50;
+  let volatilityWarning = false;
+  
+  if (atrPercentage1h > 0) {
+    if (atrPercentage1h <= thresholdLow) {
+      volatilityStatus = 'LOW';
+      volatilityScore = 95;
+    } else if (atrPercentage1h <= thresholdHigh) {
+      volatilityStatus = 'NORMAL';
+      volatilityScore = 75;
+    } else if (atrPercentage1h <= thresholdHigh * 1.5) {
+      volatilityStatus = 'HIGH';
+      volatilityScore = 50;
+      volatilityWarning = true;
+    } else {
+      volatilityStatus = 'EXTREME';
+      volatilityScore = 25;
+      volatilityWarning = true;
+    }
+  }
+  
+  console.log(`  Status: ${volatilityStatus}, Score: ${volatilityScore}`);
+  
+  // =====================================================
+  // RISK PROFILE
+  // =====================================================
+  
+  let riskLevel, maxSuggestedLeverage;
+  
+  if (tier === 1) {
+    riskLevel = 'CONSERVATIVE';
+    maxSuggestedLeverage = 10;
+  } else if (tier === 2) {
+    riskLevel = 'MODERATE';
+    maxSuggestedLeverage = 7;
+  } else {
+    riskLevel = 'AGGRESSIVE';
+    maxSuggestedLeverage = 5;
+  }
+  
+  // =====================================================
+  // OUTPUT (PRESERVE ALL DATA)
+  // =====================================================
+  
+  return {
+    json: {
+      ...data, // ✅ Запазваме всички данни
+      
+      // ATR Analysis Results
+      current_atr_1h: atr1h,
+      atr_percentage_1h: atrPercentage1h,
+      volatility_status: volatilityStatus,
+      volatility_score: volatilityScore,
+      volatility_warning: volatilityWarning,
+      
+      // Risk Profile
+      risk_level: riskLevel,
+      max_suggested_leverage: maxSuggestedLeverage,
+      
+      // Metadata
+      processed_by: 'ATR Volatility Analyzer v1.0',
+      analysis_timestamp: new Date().toISOString()
+    }
+  };
+});
+
+// =====================================================
+// SUMMARY
+// =====================================================
+
+console.log(`\n✅ Complete for ${processedResults.length} symbols`);
+
+const avgVolScore = processedResults.reduce((sum, r) => 
+  sum + (r.json.volatility_score || 0), 0) / processedResults.length;
+
+console.log(`📊 Average Volatility Score: ${avgVolScore.toFixed(1)}/100`);
+
+const statusCounts = processedResults.reduce((acc, r) => {
+  const status = r.json.volatility_status;
+  acc[status] = (acc[status] || 0) + 1;
+  return acc;
+}, {});
+
+console.log('\n📈 Status Distribution:');
+Object.keys(statusCounts).forEach(status => {
+  console.log(`  ${status}: ${statusCounts[status]} symbols`);
+});
+
+console.log('\n✅ Ready for Node 1.3: Prepare Tier Data');
+
+return processedResults;
