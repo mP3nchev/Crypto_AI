@@ -1,0 +1,409 @@
+// =====================================================
+// NODE 9: HARD FILTERS ENFORCER v3.0 - TIER-AWARE
+// =====================================================
+// Получава от Entry Zone Validator:
+// - ALL signals (validated + invalid)
+//
+// Прилага ВСИЧКИ hard filters:
+// 1. Score Floor (tier-aware + ADX-dynamic)
+// 2. R/R Filter (rr_filter_passed = true)
+// 3. Volume Ratio (volume_ratio >= 0.5)
+// 4. Entry Validation (is_valid_entry = true)
+//
+// ВАЖНО: Само сигнали които преминат ВСИЧКИ филтри продължават
+// Това е последният качествен контрол преди ranking
+// =====================================================
+
+console.log('🚨 ╔═══════════════════════════════════════╗');
+console.log('   HARD FILTERS ENFORCER v3.0 - TIER-AWARE');
+console.log('╚═══════════════════════════════════════╝');
+
+const allSignals = $input.all();
+console.log(`📊 Enforcing tier-aware hard filters on ${allSignals.length} signals`);
+
+if (allSignals.length === 0) {
+  console.log('⚠️ No input data received');
+  return [];
+}
+
+// =====================================================
+// TIER-AWARE DYNAMIC SCORE FLOOR FUNCTION
+// =====================================================
+function getDynamicScoreFloor(signal) {
+  const tier = parseInt(signal.json.tier || 2);
+  const adxRaw = signal.json.adx_2h;
+  const adxMissing = (adxRaw === null || adxRaw === undefined || adxRaw === '' || isNaN(parseFloat(adxRaw)));
+  const adx = adxMissing ? -1 : parseFloat(adxRaw);
+  
+  // Tier-specific базови прагове
+  // По-високият tier → по-НИСКИ прагове (защото са по-рискови)
+  const tierBaseFloors = {
+    1: { strong: 70, moderate: 65, weak: 60, ranging: 55 },  // Консервативни (BTC, ETH)
+    2: { strong: 68, moderate: 63, weak: 58, ranging: 53 },  // Балансирани (LINK, UNI)
+    3: { strong: 65, moderate: 60, weak: 55, ranging: 50 }   // Агресивни (Shitcoins)
+  };
+  
+  const floors = tierBaseFloors[tier] || tierBaseFloors[2];
+  
+  // Връща праг базиран на ADX силата
+if (adxMissing) return floors.weak;  // ← conservative при липса на данни
+  if (adx >= 25) return floors.strong;
+  if (adx >= 20) return floors.moderate;
+  if (adx >= 15) return floors.weak;
+  return floors.ranging;
+}
+
+// =====================================================
+// HARD FILTER CONFIGURATION
+// =====================================================
+const HARD_FILTERS = {
+  MIN_VOLUME_RATIO: 0.5,    // Намалено от 0.6 на 0.5 (по-леко)
+  // Note: SCORE_FLOOR е динамичен (tier-aware)
+  // Note: R/R filter вече е приложен в step 5
+  // Note: Entry validation е в step 8
+};
+
+console.log(`\n📋 Hard Filter Configuration:`);
+console.log(`  Score Floor: DYNAMIC (tier-aware + ADX-based)`);
+console.log(`    Tier 1: 55-70 (depends on ADX)`);
+console.log(`    Tier 2: 53-68 (depends on ADX)`);
+console.log(`    Tier 3: 50-65 (depends on ADX)`);
+console.log(`  Volume Ratio: >= ${HARD_FILTERS.MIN_VOLUME_RATIO}`);
+console.log(`  R/R Filter: Must be passed (from step 5)`);
+console.log(`  Entry Validation: Must be valid (from step 8)`);
+
+// =====================================================
+// PROCESS EACH SIGNAL WITH TIER-AWARE FILTERING
+// =====================================================
+const validSignals = [];
+const rejectedSignals = [];
+
+allSignals.forEach((signal, index) => {
+  const data = signal.json;
+  
+  // ✅ Получаваме ИНДИВИДУАЛЕН праг за ТОЗИ актив
+  const dynamicScoreFloor = getDynamicScoreFloor(signal);
+  
+  console.log(`\n┌─────────────────────────────────────┐`);
+  console.log(`📋 Signal ${index + 1}/${allSignals.length}: ${data.symbol}`);
+  console.log(`└─────────────────────────────────────┘`);
+  
+  // =====================================================
+  // EXTRACT FILTER-RELEVANT FIELDS
+  // =====================================================
+  const symbol = data.symbol;
+  const totalScore = parseFloat(data.total_score || 0);
+  const volumeRatio = parseFloat(data.volume_ratio || 0);
+  const rrFilterPassed = data.rr_filter_passed === true;
+  const isValidEntry = data.is_valid_entry === true;
+  const feeAdjustedRR = parseFloat(data.fee_adjusted_rr || 0);
+  const tier = parseInt(data.tier || 2);
+  const adx = parseFloat(data.adx_2h || 0);
+  
+  console.log(`  📊 Metrics:`);
+  console.log(`     Tier: ${tier}`);
+  console.log(`     ADX: ${adx.toFixed(1)}`);
+  console.log(`     Total Score: ${totalScore.toFixed(2)}/100`);
+  console.log(`     → Dynamic Score Floor: ${dynamicScoreFloor}`);
+  console.log(`     Volume Ratio: ${volumeRatio.toFixed(2)}`);
+  console.log(`     Fee-Adjusted R/R: ${feeAdjustedRR.toFixed(2)}`);
+  console.log(`     R/R Filter Passed: ${rrFilterPassed ? 'Yes' : 'No'}`);
+  console.log(`     Entry Validation: ${isValidEntry ? 'Valid' : 'Invalid'}`);
+  
+  // =====================================================
+  // FILTER CHECKS (TIER-AWARE)
+  // =====================================================
+ const filterChecks = {
+    score_floor: {
+      passed: totalScore >= dynamicScoreFloor,
+      value: totalScore,
+      threshold: dynamicScoreFloor,
+      reason: totalScore >= dynamicScoreFloor ? null : 
+        `Total score ${totalScore.toFixed(2)} < ${dynamicScoreFloor} floor (Tier ${tier}, ADX ${adx.toFixed(1)})`
+    },
+    volume_ratio: {
+      passed: volumeRatio >= HARD_FILTERS.MIN_VOLUME_RATIO,
+      value: volumeRatio,
+      threshold: HARD_FILTERS.MIN_VOLUME_RATIO,
+      reason: volumeRatio >= HARD_FILTERS.MIN_VOLUME_RATIO ? null : 
+        `Volume ratio ${volumeRatio.toFixed(2)} < ${HARD_FILTERS.MIN_VOLUME_RATIO} minimum`
+    },
+    risk_reward: {
+      passed: rrFilterPassed && feeAdjustedRR >= ({ 1: 1.5, 2: 2.0, 3: 2.5 }[tier] ?? 1.5),
+      value: feeAdjustedRR,
+      threshold: ({ 1: 1.5, 2: 2.0, 3: 2.5 }[tier] ?? 1.5),
+      flag_value: rrFilterPassed,
+      numeric_check: feeAdjustedRR >= ({ 1: 1.5, 2: 2.0, 3: 2.5 }[tier] ?? 1.5),
+      upstream_flag_override: rrFilterPassed && feeAdjustedRR < ({ 1: 1.5, 2: 2.0, 3: 2.5 }[tier] ?? 1.5),
+      reason: (rrFilterPassed && feeAdjustedRR >= ({ 1: 1.5, 2: 2.0, 3: 2.5 }[tier] ?? 1.5)) ? null :
+        !rrFilterPassed ? 'R/R filter not passed (step 5)' :
+        `fee_adjusted_rr ${feeAdjustedRR.toFixed(2)} < ${({ 1: 1.5, 2: 2.0, 3: 2.5 }[tier] ?? 1.5)} (Tier ${tier} floor)`
+    },
+    entry_validation: {
+      passed: isValidEntry,
+      value: isValidEntry ? 'VALID' : 'INVALID',
+      threshold: 'VALID',
+      reason: isValidEntry ? null : data.entry_rejection_reason || 'Entry zone validation failed'
+    },
+    // ═══════════════════════════════════════════════════
+    // CHECK #5: ENTRY ZONE CALCULATED (Node 7 output)
+    // Guards against atr=0 bypass — entry_calculated must
+    // be explicitly true, not just truthy or undefined
+    // ═══════════════════════════════════════════════════
+    entry_calculated: {
+      passed: data.entry_calculated === true,
+      value: data.entry_calculated,
+      threshold: true,
+      reason: data.entry_calculated === true ? null :
+        data.entry_calculated === false
+          ? 'Entry zone not calculated (atr=0 or insufficient data from Node 7)'
+          : 'entry_calculated flag missing — Node 7 output not propagated'
+    }
+  };
+  
+  // =====================================================
+  // DETERMINE OVERALL PASS/FAIL
+  // =====================================================
+  const allFiltersPassed = Object.values(filterChecks).every(f => f.passed);
+  
+  // Collect all failure reasons
+  const failureReasons = Object.entries(filterChecks)
+    .filter(([_, f]) => !f.passed)
+    .map(([name, f]) => `${name}: ${f.reason}`);
+  
+  // =====================================================
+  // LOG FILTER RESULTS
+  // =====================================================
+  console.log(`\n  🔍 Filter Results:`);
+  console.log(`    ${filterChecks.score_floor.passed ? '✅' : '❌'} Score Floor: ${totalScore.toFixed(2)} ${filterChecks.score_floor.passed ? '≥' : '<'} ${dynamicScoreFloor} (Tier ${tier}, ADX ${adx.toFixed(1)})`);
+  console.log(`    ${filterChecks.volume_ratio.passed ? '✅' : '❌'} Volume Ratio: ${volumeRatio.toFixed(2)} ${filterChecks.volume_ratio.passed ? '≥' : '<'} ${HARD_FILTERS.MIN_VOLUME_RATIO}`);
+  console.log(`    ${filterChecks.risk_reward.passed ? '✅' : '❌'} R/R Filter: ${rrFilterPassed ? 'Passed' : 'Failed'} (${feeAdjustedRR.toFixed(2)})`);
+  console.log(`    ${filterChecks.entry_validation.passed ? '✅' : '❌'} Entry Validation: ${isValidEntry ? 'Valid' : 'Invalid'}`);
+  console.log(`    ${filterChecks.entry_calculated.passed ? '✅' : '❌'} Entry Calculated: ${data.entry_calculated === true ? 'Yes' : data.entry_calculated === false ? 'No (atr=0)' : 'MISSING FLAG'}`);
+  
+  // =====================================================
+  // ROUTING: VALID vs REJECTED
+  // =====================================================
+  if (allFiltersPassed) {
+    // ✅ PASSED ALL HARD FILTERS
+    console.log(`\n  ✅ ALL FILTERS PASSED - Signal proceeding to ranking`);
+    
+    validSignals.push({
+      json: {
+        // ════════════════════════════════════��══
+        // PASS-THROUGH ALL DATA
+        // ═══════════════════════════════════════
+        ...data,
+        
+        // ═══════════════════════════════════════
+        // FILTER METADATA
+        // ═══════════════════════════════════════
+        filter_status: 'PASSED',
+        filters_passed: Object.keys(filterChecks),
+        filter_checks: filterChecks,
+        dynamic_score_floor: dynamicScoreFloor,
+        tier_classification: `Tier ${tier}`,
+        adx_strength: adx,
+        
+        // ═══════════════════════════════════════
+        // TIMESTAMPS
+        // ═══════════════════════════════════════
+        filters_enforced_at: new Date().toISOString(),
+        filter_version: 'v3.0_tier_aware'
+      }
+    });
+    
+  } else {
+    // ❌ FAILED ONE OR MORE HARD FILTERS
+    const filterReason = failureReasons.join('; ');
+    console.log(`\n  ❌ FILTERS FAILED: ${filterReason}`);
+    
+    rejectedSignals.push({
+      json: {
+        // ═══════════════════════════════════════
+        // CORE IDENTIFIERS
+        // ═══════════════════════════════════════
+        symbol: symbol,
+        signal_direction: data.signal_direction,
+        tier: tier,
+        
+        // ═══════════════════════════════════════
+        // REJECTION METADATA
+        // ═══════════════════════════════════════
+        filter_status: 'REJECTED',
+        filter_reason: filterReason,
+        failed_filters: failureReasons,
+        filter_checks: filterChecks,
+        dynamic_score_floor: dynamicScoreFloor,
+        
+        // ═══════════════════════════════════════
+        // KEY METRICS (for debugging)
+        // ═══════════════════════════════════════
+        total_score: totalScore,
+        volume_ratio: volumeRatio,
+        fee_adjusted_rr: feeAdjustedRR,
+        rr_filter_passed: rrFilterPassed,
+        is_valid_entry: isValidEntry,
+        adx_2h: adx,
+        
+        // ═══════════════════════════════════════
+        // ORIGINAL DATA (preserved for audit)
+        // ═══════════════════════════════════════
+        original_data: data,
+        
+        // ═══════════════════════════════════════
+        // TIMESTAMPS
+        // ═══════════════════════════════════════
+        rejected_at: new Date().toISOString(),
+        scan_cycle_id: data.scan_cycle_id,
+        filter_version: 'v3.0_tier_aware'
+      }
+    });
+  }
+});
+
+// =====================================================
+// SUMMARY STATISTICS
+// =====================================================
+console.log(`\n\n╔═══════════════════════════════════════════════════╗`);
+console.log(`║  TIER-AWARE HARD FILTERS ENFORCEMENT SUMMARY      ║`);
+console.log(`╚═══════════════════════════════════════════════════╝`);
+console.log(`📊 Total Signals Processed: ${allSignals.length}`);
+console.log(`✅ Valid Signals (Passed All Filters): ${validSignals.length}`);
+console.log(`❌ Rejected Signals (Failed 1+ Filters): ${rejectedSignals.length}`);
+console.log(`📈 Pass Rate: ${((validSignals.length / allSignals.length) * 100).toFixed(1)}%`);
+
+// Tier-specific pass rates
+if (allSignals.length > 0) {
+  console.log(`\n🧬 Tier-Specific Pass Rates:`);
+  [1, 2, 3].forEach(tier => {
+    const tierSignals = allSignals.filter(s => parseInt(s.json.tier) === tier);
+    const tierPassed = validSignals.filter(s => parseInt(s.json.tier) === tier);
+    if (tierSignals.length > 0) {
+      const passRate = (tierPassed.length / tierSignals.length * 100).toFixed(1);
+      console.log(`  Tier ${tier}: ${tierPassed.length}/${tierSignals.length} passed (${passRate}%)`);
+    }
+  });
+}
+
+// Rejection breakdown
+if (rejectedSignals.length > 0) {
+  console.log(`\n🚫 Rejection Breakdown by Filter:`);
+  const rejectionReasons = {};
+  
+  rejectedSignals.forEach(sig => {
+    sig.json.failed_filters.forEach(reason => {
+      const filterName = reason.split(':')[0].trim();
+      rejectionReasons[filterName] = (rejectionReasons[filterName] || 0) + 1;
+    });
+  });
+  
+  Object.entries(rejectionReasons)
+    .sort((a, b) => b[1] - a[1])
+    .forEach(([filter, count]) => {
+      console.log(`  ${filter}: ${count} signals`);
+    });
+  
+  console.log(`\n📋 Rejected Signals (Top 5):`);
+  rejectedSignals
+    .slice(0, 5)
+    .forEach((sig, i) => {
+      console.log(`  ${i + 1}. ${sig.json.symbol} (Tier ${sig.json.tier}): ${sig.json.filter_reason}`);
+    });
+}
+
+// Valid signals summary
+if (validSignals.length > 0) {
+  console.log(`\n🏆 Valid Signals Summary:`);
+  
+  // Score distribution
+  const avgScore = validSignals.reduce((sum, s) => sum + s.json.total_score, 0) / validSignals.length;
+  const maxScore = Math.max(...validSignals.map(s => s.json.total_score));
+  const minScore = Math.min(...validSignals.map(s => s.json.total_score));
+  
+  console.log(`  Average Score: ${avgScore.toFixed(2)}/100`);
+  console.log(`  Max Score: ${maxScore.toFixed(2)}/100`);
+  console.log(`  Min Score: ${minScore.toFixed(2)}/100`);
+  
+  // Tier distribution
+  const tierDist = {
+    1: validSignals.filter(s => s.json.tier === 1).length,
+    2: validSignals.filter(s => s.json.tier === 2).length,
+    3: validSignals.filter(s => s.json.tier === 3).length
+  };
+  
+  console.log(`\n  Tier Distribution:`);
+  Object.entries(tierDist).forEach(([tier, count]) => {
+    if (count > 0) {
+      console.log(`    Tier ${tier}: ${count} signals`);
+    }
+  });
+  
+  // Direction distribution
+  const directionDist = {
+    LONG: validSignals.filter(s => s.json.signal_direction === 'LONG').length,
+    SHORT: validSignals.filter(s => s.json.signal_direction === 'SHORT').length
+  };
+  
+  console.log(`\n  Direction Distribution:`);
+  Object.entries(directionDist).forEach(([direction, count]) => {
+    if (count > 0) {
+      console.log(`    ${direction}: ${count} signals`);
+    }
+  });
+  
+  // Dynamic score floors used
+  console.log(`\n  📊 Dynamic Score Floors Applied:`);
+  const scoreFloors = {};
+  validSignals.forEach(s => {
+    const floor = s.json.dynamic_score_floor;
+    scoreFloors[floor] = (scoreFloors[floor] || 0) + 1;
+  });
+  Object.entries(scoreFloors)
+    .sort((a, b) => parseInt(a[0]) - parseInt(b[0]))
+    .forEach(([floor, count]) => {
+      console.log(`    Floor ${floor}: ${count} signals`);
+    });
+  
+  console.log(`\n🥇 Top 5 Valid Signals (by Total Score):`);
+  validSignals
+    .sort((a, b) => b.json.total_score - a.json.total_score)
+    .slice(0, 5)
+    .forEach((sig, i) => {
+      const data = sig.json;
+      console.log(`  ${i + 1}. ${data.symbol}: ${data.total_score.toFixed(2)}/100 (${data.signal_direction}, Tier ${data.tier}, Floor: ${data.dynamic_score_floor})`);
+    });
+}
+
+console.log(`\n✅ Tier-Aware Hard Filters Enforcement Complete`);
+
+// =====================================================
+// RETURN OUTPUT
+// =====================================================
+if (validSignals.length > 0) {
+  console.log(`📤 Passing ${validSignals.length} valid signals to Signal Ranking & Top 5 Selection`);
+  console.log(`\n💡 Note: Signals filtered with tier-aware dynamic score floors`);
+  return validSignals;
+} else {
+  console.log(`⚠️ NO VALID SIGNALS - All signals were filtered out`);
+  console.log(`\n🔍 Debugging Info:`);
+  console.log(`   - Check if R/R filter threshold (0.25) is appropriate`);
+  console.log(`   - Verify dynamic score floors are not too strict`);
+  console.log(`   - Review rejection reasons above`);
+  
+  return [{
+    json: {
+      error: 'No signals passed tier-aware hard filters',
+      rejected_count: rejectedSignals.length,
+      filter_version: 'v3.0_tier_aware',
+      rejection_summary: rejectedSignals.map(s => ({
+        symbol: s.json.symbol,
+        tier: s.json.tier,
+        total_score: s.json.total_score,
+        dynamic_floor: s.json.dynamic_score_floor,
+        reasons: s.json.failed_filters
+      })),
+      timestamp: new Date().toISOString()
+    }
+  }];
+}
