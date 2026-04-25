@@ -1,0 +1,54 @@
+const validSymbols = [];
+const inputItems = $input.all();
+
+console.log(`📥 Total input items: ${inputItems.length}`);
+
+const requiredCandles = 36;
+const batchSize = 10;
+
+for (let i = 0; i < inputItems.length; i += batchSize) {
+  const batch = inputItems.slice(i, i + batchSize);
+  console.log(`🔄 Batch ${Math.floor(i/batchSize) + 1}/${Math.ceil(inputItems.length/batchSize)}`);
+  
+  const promises = batch.map(async (item) => {
+    const symbol = item.json.symbol;
+    if (!symbol) return null;
+    
+    try {
+      const response = await this.helpers.httpRequest({
+        method: 'GET',
+        url: 'https://api.binance.com/api/v3/klines',
+        qs: {
+          symbol: symbol,
+          interval: '2h',
+          limit: 36
+        },
+        json: true
+      });
+      
+      if (Array.isArray(response) && response.length >= requiredCandles) {
+        console.log(`✅ ${symbol}: ${response.length} candles (VALID)`);
+        return item.json;
+      } else {
+        console.log(`❌ ${symbol}: ${response.length || 0} candles (needs ${requiredCandles})`);
+        return null;
+      }
+      
+    } catch (error) {
+      console.log(`❌ ${symbol}: ${error.message}`);
+      return null;
+    }
+  });
+  
+  const results = await Promise.all(promises);
+  validSymbols.push(...results.filter(r => r !== null).map(json => ({ json })));
+}
+
+console.log(`\n📤 Total valid symbols: ${validSymbols.length}`);
+
+if (validSymbols.length === 0) {
+  console.log("⚠️ NO VALID SYMBOLS FOUND!");
+  return [];
+}
+
+return validSymbols;
