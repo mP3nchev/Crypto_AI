@@ -1,0 +1,108 @@
+// =====================================================
+// BRANCH 2.1: ADX MARKET CONDITION DETECTOR
+// Определя market condition на база ADX 2h
+// =====================================================
+
+console.log('📊 === ADX MARKET CONDITION DETECTOR START ===');
+
+const scanResults = $input.all();
+console.log(`Analyzing market conditions for ${scanResults.length} symbols`);
+
+// =====================================================
+// ADX THRESHOLDS
+// =====================================================
+
+const ADX_THRESHOLDS = {
+  STRONG_TREND: 25,
+  NEUTRAL_MIN: 15,
+  NEUTRAL_MAX: 25
+};
+
+// =====================================================
+// MARKET CONDITION CLASSIFICATION
+// =====================================================
+
+function classifyMarketCondition(adx2h) {
+  const adxValue = parseFloat(adx2h);
+  
+  if (isNaN(adxValue) || adxValue <= 0) {
+    return {
+      condition: 'UNKNOWN',
+      strength: 0,
+      description: 'ADX data unavailable'
+    };
+  }
+  
+  if (adxValue > ADX_THRESHOLDS.STRONG_TREND) {
+    return {
+      condition: 'STRONG_TREND',
+      strength: adxValue,
+      description: 'Strong directional movement'
+    };
+  } else if (adxValue >= ADX_THRESHOLDS.NEUTRAL_MIN && adxValue <= ADX_THRESHOLDS.NEUTRAL_MAX) {
+    return {
+      condition: 'NEUTRAL',
+      strength: adxValue,
+      description: 'Moderate trend strength'
+    };
+  } else {
+    return {
+      condition: 'RANGING',
+      strength: adxValue,
+      description: 'Weak trend, ranging market'
+    };
+  }
+}
+
+// =====================================================
+// PROCESS EACH SYMBOL
+// =====================================================
+
+const results = scanResults.map(item => {
+  const data = item.json;
+  const adx2h = data.adx_2h;
+  
+  const marketCondition = classifyMarketCondition(adx2h);
+  
+  console.log(`${data.symbol}: ADX ${marketCondition.strength.toFixed(1)} → ${marketCondition.condition}`);
+  
+  return {
+    json: {
+      ...data, // ✅ Запазваме всички данни
+      
+      // Market Condition Analysis
+      market_condition: marketCondition.condition,
+      adx_strength: marketCondition.strength,
+      market_description: marketCondition.description,
+      
+      // Metadata
+      market_analyzed_at: new Date().toISOString()
+    }
+  };
+});
+
+// =====================================================
+// SUMMARY STATISTICS
+// =====================================================
+
+const conditionCounts = results.reduce((acc, r) => {
+  const condition = r.json.market_condition;
+  acc[condition] = (acc[condition] || 0) + 1;
+  return acc;
+}, {});
+
+console.log('\n📊 === MARKET CONDITION SUMMARY ===');
+console.log(`Total symbols: ${results.length}`);
+console.log(`🔥 Strong Trend: ${conditionCounts.STRONG_TREND || 0} symbols`);
+console.log(`⚖️  Neutral: ${conditionCounts.NEUTRAL || 0} symbols`);
+console.log(`📦 Ranging: ${conditionCounts.RANGING || 0} symbols`);
+console.log(`❓ Unknown: ${conditionCounts.UNKNOWN || 0} symbols`);
+
+const avgADX = results.reduce((sum, r) => 
+  sum + (r.json.adx_strength || 0), 0) / results.length;
+
+console.log(`\n📈 Average ADX: ${avgADX.toFixed(2)}`);
+
+console.log('\n✅ Ready for Node 2.2: Adaptive Weights Calculator');
+
+return results;
