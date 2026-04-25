@@ -1,0 +1,312 @@
+// =====================================================
+// NODE 5: RISK/REWARD FILTER v2.0 - HARD FILTER
+// =====================================================
+// Получава от TP/SL Calculator:
+// - fee_adjusted_rr (primary R/R за filtering)
+// - tpsl_calculated (flag)
+// - tier, sl_distance_pct
+//
+// Функция:
+// - HARD FILTER: fee_adjusted_rr >= 2.0
+// - Disqualify сигнали под праг
+// - Изчислява recommended_leverage
+// - Дава R/R bonus за exceptional ratios (>3.0)
+//
+// ВАЖНО: Това е sustainability filter, не quality filter
+// =====================================================
+
+console.log('🛡️ ═══════════════════════════════════════════════');
+console.log('   RISK/REWARD FILTER v2.0 - HARD FILTER');
+console.log('═══════════════════════════════════════════════');
+
+const inputData = $input.all();
+console.log(`📊 Filtering ${inputData.length} signals by R/R criteria`);
+
+if (inputData.length === 0) {
+  console.log('⚠️ No input data received');
+  return [];
+}
+
+// =====================================================
+// FILTER CONFIGURATION
+// =====================================================
+const TIER_MIN_RR = {
+  1: 1.5,  // BTC/ETH — tight SL, реалистично постижим TP
+  2: 2.0,  // mid-caps — по-широк SL, нужен по-далечен TP
+  3: 2.5   // altcoins — stop hunts + ликвидност риск
+};
+
+// TIER-SPECIFIC MAX LEVERAGE
+const TIER_MAX_LEVERAGE = {
+  1: 10,   // Tier 1: Conservative (BTC, ETH)
+  2: 7.5,  // Tier 2: Moderate (Large Alts)
+  3: 5     // Tier 3: Aggressive (Small Alts)
+};
+
+// R/R BONUS THRESHOLDS
+const RR_BONUS_THRESHOLDS = {
+  exceptional: 3.5,  // +10 bonus points
+  excellent: 3.0,    // +5 bonus points
+  good: 2.5          // +2 bonus points
+};
+
+// =====================================================
+// RISK/REWARD FILTER FUNCTION
+// =====================================================
+function applyRRFilter(data) {
+  const feeAdjustedRR = parseFloat(data.fee_adjusted_rr || 0);
+  const weightedRR = parseFloat(data.weighted_rr_ratio || 0);
+  const slDistancePct = parseFloat(data.sl_distance_pct || 0);
+  const tier = parseInt(data.tier || 2);
+  const tpslCalculated = data.tpsl_calculated === true;
+  
+  console.log(`  Fee-Adjusted R/R: ${feeAdjustedRR.toFixed(2)}`);
+  console.log(`  Weighted R/R: ${weightedRR.toFixed(2)}`);
+  console.log(`  SL Distance: ${slDistancePct.toFixed(2)}%`);
+  console.log(`  Tier: ${tier}`);
+  
+  // =====================================================
+  // CHECK 1: TP/SL Data Validation
+  // =====================================================
+  if (!tpslCalculated) {
+    console.log(`  ❌ DISQUALIFIED: No TP/SL data`);
+    return {
+      passed: false,
+      disqualified: true,
+      disqualification_reason: 'NO_TPSL_DATA',
+      bonus: 0,
+      recommended_leverage: 0,
+      leverage_calculation: null
+    };
+  }
+  
+  // =====================================================
+  // CHECK 2: R/R Hard Filter
+  // =====================================================
+const minRR = TIER_MIN_RR[tier] ?? 1.5;
+
+  if (feeAdjustedRR < minRR) {
+    console.log(`  ❌ DISQUALIFIED: R/R ${feeAdjustedRR.toFixed(2)} < ${minRR} (Tier ${tier} minimum)`);
+    return {
+      passed: false,
+      disqualified: true,
+      disqualification_reason: `FEE_ADJUSTED_RR_BELOW_TIER_MINIMUM (${feeAdjustedRR.toFixed(2)} < ${minRR}, Tier ${tier})`,
+      bonus: 0,
+      recommended_leverage: 0,
+      leverage_calculation: null,
+      rr_threshold_used: minRR,
+      rr_tier_applied: tier
+    };
+  }
+
+  console.log(`  ✅ PASSED: R/R ${feeAdjustedRR.toFixed(2)} >= ${minRR} (Tier ${tier} minimum)`);
+  // =====================================================
+  // CALCULATE R/R BONUS (for exceptional ratios)
+  // =====================================================
+  let rrBonus = 0;
+  
+  if (feeAdjustedRR >= RR_BONUS_THRESHOLDS.exceptional) {
+    rrBonus = 10;
+    console.log(`  🎁 EXCEPTIONAL R/R (>=${RR_BONUS_THRESHOLDS.exceptional}): +10 bonus points`);
+  } else if (feeAdjustedRR >= RR_BONUS_THRESHOLDS.excellent) {
+    rrBonus = 5;
+    console.log(`  🎁 EXCELLENT R/R (>=${RR_BONUS_THRESHOLDS.excellent}): +5 bonus points`);
+  } else if (feeAdjustedRR >= RR_BONUS_THRESHOLDS.good) {
+    rrBonus = 2;
+    console.log(`  🎁 GOOD R/R (>=${RR_BONUS_THRESHOLDS.good}): +2 bonus points`);
+  }
+  
+  // =====================================================
+  // CALCULATE RECOMMENDED LEVERAGE
+  // =====================================================
+  // Target risk: 1-2% of capital per trade
+  const targetRiskPct = tier === 1 ? 1.0 : tier === 2 ? 1.5 : 2.0;
+  
+  // Leverage = Target Risk % / SL Distance %
+  const calculatedLeverage = slDistancePct > 0 ? targetRiskPct / slDistancePct : 0;
+  
+  // Apply tier-specific max leverage
+  const maxLeverageForTier = TIER_MAX_LEVERAGE[tier] || TIER_MAX_LEVERAGE[2];
+  const flooredLeverage = Math.floor(calculatedLeverage);
+  const leverageAtMinimum = flooredLeverage < 1;
+  const recommendedLeverage = Math.min(
+    Math.max(1, flooredLeverage),
+    maxLeverageForTier
+  );
+  
+  console.log(`  🎚️ Leverage Calculation:`);
+  console.log(`     Target Risk: ${targetRiskPct}%`);
+  console.log(`     SL Distance: ${slDistancePct.toFixed(2)}%`);
+  console.log(`     Calculated: ${calculatedLeverage.toFixed(1)}x`);
+  console.log(`     Tier Max: ${maxLeverageForTier}x`);
+  console.log(`     Recommended: ${recommendedLeverage}x${leverageAtMinimum ? ' ⚠️ MINIMUM GUARD APPLIED' : ''}`);
+  
+  return {
+    passed: true,
+    disqualified: false,
+    disqualification_reason: null,
+    bonus: rrBonus,
+    recommended_leverage: recommendedLeverage,
+    leverage_at_minimum: leverageAtMinimum,
+    leverage_calculation: {
+      target_risk_pct: targetRiskPct,
+      sl_distance_pct: slDistancePct,
+      calculated_leverage: parseFloat(calculatedLeverage.toFixed(2)),
+      tier_max_leverage: maxLeverageForTier,
+      final_leverage: recommendedLeverage,
+      minimum_guard_applied: leverageAtMinimum
+    }
+  };
+}
+
+
+// =====================================================
+// PROCESS EACH SYMBOL
+// =====================================================
+const results = [];
+const rejectedSignals = [];
+
+inputData.forEach((item, index) => {
+  const data = item.json;
+  
+  console.log(`\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━`);
+  console.log(`📋 Symbol ${index + 1}/${inputData.length}: ${data.symbol}`);
+  console.log(`━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━`);
+  
+  // Apply R/R filter
+  const filterResult = applyRRFilter(data);
+  
+  if (filterResult.disqualified) {
+    // Signal FAILED R/R filter
+    console.log(`\n❌ Signal REJECTED - Adding to rejected list`);
+    
+    rejectedSignals.push({
+      json: {
+        ...data,
+        rr_filter_passed: false,
+        rr_disqualified: true,
+        rr_disqualification_reason: filterResult.disqualification_reason,
+        rr_bonus: 0,
+        recommended_leverage: 0,
+        signal_strength: 'DISQUALIFIED',
+        rr_filter_applied_at: new Date().toISOString()
+      }
+    });
+    
+  } else {
+    // Signal PASSED R/R filter
+    console.log(`\n✅ Signal PASSED - Adding to results`);
+    
+    results.push({
+      json: {
+        // ═══════════════════════════════════════════════
+        // PASS-THROUGH ALL EXISTING DATA
+        // ═══════════════════════════════════════════════
+        ...data,
+        
+        // ═══════════════════════════════════════════════
+        // R/R FILTER RESULTS
+        // ═══════════════════════════════════════════════
+        rr_filter_passed: true,
+        rr_disqualified: false,
+        rr_disqualification_reason: null,
+        
+        // ═══════════════════════════════════════════════
+        // R/R BONUS (for exceptional ratios)
+        // ═══════════════════════════════════════════════
+        rr_bonus: filterResult.bonus,
+        
+        // ═══════════════════════════════════════════════
+        // LEVERAGE RECOMMENDATION
+        // ═══════════════════════════════════════════════
+        recommended_leverage: filterResult.recommended_leverage,
+        leverage_calculation: filterResult.leverage_calculation,
+        
+        // ═══════════════════════════════════════════════
+        // TIMESTAMPS
+        // ═══════════════════════════════════════════════
+        rr_filter_applied_at: new Date().toISOString()
+      }
+    });
+  }
+});
+
+// =====================================================
+// SUMMARY STATISTICS
+// =====================================================
+console.log(`\n\n╔════════════════════════════════════════════════════╗`);
+console.log(`║     RISK/REWARD FILTER SUMMARY                     ║`);
+console.log(`╚════════════════════════════════════════════════════╝`);
+console.log(`📊 Total Signals Processed: ${inputData.length}`);
+console.log(`✅ Passed R/R Filter: ${results.length}`);
+console.log(`❌ Disqualified: ${rejectedSignals.length}`);
+
+if (rejectedSignals.length > 0) {
+  console.log(`\n🚫 Rejection Reasons:`);
+  const reasonCounts = {};
+  rejectedSignals.forEach(r => {
+    const reason = r.json.rr_disqualification_reason;
+    reasonCounts[reason] = (reasonCounts[reason] || 0) + 1;
+  });
+  Object.entries(reasonCounts).forEach(([reason, count]) => {
+    console.log(`  ${reason}: ${count} signals`);
+  });
+  
+  console.log(`\n📋 Rejected Signals:`);
+  rejectedSignals.slice(0, 5).forEach((r, i) => {
+    console.log(`  ${i + 1}. ${r.json.symbol}: ${r.json.rr_disqualification_reason}`);
+  });
+}
+
+if (results.length > 0) {
+  // Bonus distribution
+  const bonusDistribution = {
+    'No Bonus': results.filter(r => r.json.rr_bonus === 0).length,
+    '+2 (Good)': results.filter(r => r.json.rr_bonus === 2).length,
+    '+5 (Excellent)': results.filter(r => r.json.rr_bonus === 5).length,
+    '+10 (Exceptional)': results.filter(r => r.json.rr_bonus === 10).length
+  };
+  
+  console.log(`\n🎁 R/R Bonus Distribution:`);
+  Object.entries(bonusDistribution).forEach(([bonus, count]) => {
+    if (count > 0) {
+      console.log(`  ${bonus}: ${count} signals`);
+    }
+  });
+  
+  // Average leverage
+  const avgLeverage = results.reduce((sum, r) => sum + r.json.recommended_leverage, 0) / results.length;
+  console.log(`\n🎚️ Average Recommended Leverage: ${avgLeverage.toFixed(1)}x`);
+  
+  // Leverage distribution
+  const leverageDist = {};
+  results.forEach(r => {
+    const lev = r.json.recommended_leverage;
+    leverageDist[`${lev}x`] = (leverageDist[`${lev}x`] || 0) + 1;
+  });
+  
+  console.log(`\n📊 Leverage Distribution:`);
+  Object.entries(leverageDist)
+    .sort((a, b) => parseFloat(b[0]) - parseFloat(a[0]))
+    .forEach(([lev, count]) => {
+      console.log(`  ${lev}: ${count} signals`);
+    });
+  
+  // Top R/R ratios
+  console.log(`\n🏆 Top 3 R/R Ratios (Passed Signals):`);
+  results
+    .sort((a, b) => b.json.fee_adjusted_rr - a.json.fee_adjusted_rr)
+    .slice(0, 3)
+    .forEach((r, i) => {
+      console.log(`  ${i + 1}. ${r.json.symbol}: ${r.json.fee_adjusted_rr.toFixed(2)} (Bonus: +${r.json.rr_bonus})`);
+    });
+}
+
+console.log(`\n✅ Risk/Reward Filter Complete`);
+console.log(`📤 Passing ${results.length} signals to Risk/Reward Score Output`);
+console.log(`\n💡 Note: ${rejectedSignals.length} signals disqualified (not passed forward)`);
+
+// =====================================================
+// RETURN ONLY PASSED SIGNALS
+// =====================================================
+return results;
