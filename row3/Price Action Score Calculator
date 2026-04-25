@@ -1,0 +1,181 @@
+// =====================================================
+// NODE 6.2: PRICE ACTION SCORE CALCULATOR
+// =====================================================
+
+console.log('🎨 === PRICE ACTION SCORE CALCULATOR START ===');
+
+const inputData = $input.all();
+console.log(`Calculating price action scores for ${inputData.length} symbols`);
+
+// =====================================================
+// PRICE ACTION SCORING FUNCTION
+// =====================================================
+
+function calculatePriceActionScore(data) {
+  let totalScore = 0;
+  let maxScore = 0;
+  
+  console.log(`\n--- ${data.symbol} ---`);
+  
+// =====================================================
+// COMPONENT 1: VWAP ANALYSIS (50 points max)
+// =====================================================
+
+const vwap_1h = parseFloat(data.vwap_1h);
+const close_price = parseFloat(data.close_price);  // 1h close от raw_candles_data
+
+if (!isNaN(vwap_1h) && !isNaN(close_price) && vwap_1h > 0) {
+  maxScore += 50;
+  
+  const vwapDistance = ((close_price - vwap_1h) / vwap_1h) * 100;
+  const vwapDistancePct = Math.abs(vwapDistance);
+  const signalDirection = data.signal_direction || 'NEUTRAL';
+  
+  console.log(`  📊 Price vs VWAP: ${vwapDistance.toFixed(2)}% (Signal: ${signalDirection})`);
+  
+  // 🆕 CHOP ZONE CHECK (applies to both LONG & SHORT)
+  if (vwapDistancePct < 0.3) {
+    // Price too close to VWAP - dangerous ranging/sideways zone
+    totalScore += 10; // Minimal points for chop zone
+    console.log(`  ⚠️ CHOP ZONE: Price within 0.3% of VWAP → only +10 points`);
+    console.log(`     This indicates potential ranging/sideways movement`);
+    
+  } else if (vwapDistancePct <= 0.5) {
+    // Near VWAP but outside chop zone
+    totalScore += 40;
+    console.log(`  ✅ Near VWAP (outside chop): +40 points`);
+    
+  } else if (vwapDistancePct <= 2) {
+    // Within 2% of VWAP - check direction alignment
+    
+    if (signalDirection === 'LONG' && vwapDistance > 0) {
+      // LONG signal with price above VWAP = Perfect alignment
+      totalScore += 50;
+      console.log(`  ✅ LONG above VWAP (bullish alignment): +50 points`);
+      
+    } else if (signalDirection === 'SHORT' && vwapDistance < 0) {
+      // SHORT signal with price below VWAP = Perfect alignment
+      totalScore += 50;
+      console.log(`  ✅ SHORT below VWAP (bearish alignment): +50 points`);
+      
+    } else if (signalDirection === 'LONG' && vwapDistance < 0) {
+      // LONG signal but price below VWAP = Contradiction
+      totalScore += 30;
+      console.log(`  ⚠️ LONG below VWAP (weak setup): +30 points`);
+      
+    } else if (signalDirection === 'SHORT' && vwapDistance > 0) {
+      // SHORT signal but price above VWAP = Contradiction
+      totalScore += 30;
+      console.log(`  ⚠️ SHORT above VWAP (weak setup): +30 points`);
+      
+    } else {
+      // Neutral or unknown direction
+      totalScore += 35;
+      console.log(`  ➡️ VWAP position: +35 points`);
+    }
+    
+  } else if (vwapDistancePct > 3) {
+    // Too far from VWAP (overextended)
+    totalScore += 20;
+    console.log(`  ⚠️ Far from VWAP (>3%): +20 points (overextended)`);
+    
+  } else {
+    // Between 2-3% distance
+    totalScore += 30;
+    console.log(`  ➡️ Moderate distance from VWAP: +30 points`);
+  }
+  
+} else {
+  console.log(`  ⚠️ VWAP or close_price missing`);
+}
+  // =====================================================
+  // COMPONENT 2: CANDLE STRUCTURE (30 points max)
+  // =====================================================
+  
+  const open_price = parseFloat(data.open_price);    // 1h open
+  const high_price = parseFloat(data.high_price);    // 1h high
+  const low_price = parseFloat(data.low_price);      // 1h low
+  
+  if (!isNaN(open_price) && !isNaN(high_price) && !isNaN(low_price) && !isNaN(close_price)) {
+    maxScore += 30;
+    
+    const candleRange = high_price - low_price;
+    const candleBody = Math.abs(close_price - open_price);
+    const bodyRatio = candleRange > 0 ? candleBody / candleRange : 0;
+    const isBullish = close_price > open_price;
+    
+    console.log(`  🕯️ Candle: ${isBullish ? 'Bullish' : 'Bearish'} | Body: ${(bodyRatio * 100).toFixed(0)}%`);
+    
+    if (bodyRatio >= 0.7) {
+      totalScore += 30;
+      console.log(`  ✅ Strong candle: +30 points`);
+    } else if (bodyRatio >= 0.5) {
+      totalScore += 25;
+      console.log(`  ✅ Moderate: +25 points`);
+    } else if (bodyRatio >= 0.3) {
+      totalScore += 15;
+      console.log(`  ⚠️ Indecision: +15 points`);
+    } else {
+      totalScore += 10;
+      console.log(`  ⚠️ Doji: +10 points`);
+    }
+  } else {
+    console.log(`  ⚠️ Candle data incomplete`);
+  }
+  
+  // =====================================================
+  // COMPONENT 3: EMA20 POSITIONING (20 points max)
+  // =====================================================
+  
+  const ema_20_1h = parseFloat(data.ema_20_1h);
+  
+  if (!isNaN(ema_20_1h) && !isNaN(close_price)) {
+    maxScore += 20;
+    
+    if (close_price > ema_20_1h) {
+      totalScore += 20;
+      console.log(`  ✅ Above EMA20: +20 points`);
+    } else {
+      totalScore += 10;
+      console.log(`  ⚠️ Below EMA20: +10 points`);
+    }
+  } else {
+    console.log(`  ⚠️ EMA20 missing`);
+  }
+  
+  // =====================================================
+  // FINAL SCORE
+  // =====================================================
+  
+  const finalScore = maxScore > 0 ? Math.round((totalScore / maxScore) * 100) : 0;
+  const priceStructure = close_price > vwap_1h ? 'BULLISH' : 'BEARISH';
+  
+  console.log(`  🎯 Price Action Score: ${finalScore}/100 (${priceStructure})`);
+  
+  return {
+    score: finalScore,
+    price_structure: priceStructure
+  };
+}
+
+// =====================================================
+// PROCESS EACH SYMBOL
+// =====================================================
+
+const results = inputData.map(item => {
+  const data = item.json;
+  const priceAction = calculatePriceActionScore(data);
+  
+  return {
+    json: {
+      ...data,
+      price_action_score: priceAction.score,
+      price_structure: priceAction.price_structure,
+      scored_at: new Date().toISOString()
+    }
+  };
+});
+
+console.log(`\n✅ Price action scoring complete for ${results.length} symbols`);
+
+return results;
