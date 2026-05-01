@@ -1,25 +1,25 @@
 // =====================================================
-// GROUP CANDLE RESPONSES v4.0 — A-03 Option A
+// GROUP CANDLE RESPONSES v4.1 — A-03 Option A
 //
-// Reads candles from 4 dedicated interval HTTP nodes.
-// Interval identity is GUARANTEED by which node produced the response
-// (not by positional matching). Symbol identity is derived from the
-// Filter nodes whose order is deterministic (from Bulk Requests Generator).
+// Reads candles from 4 dedicated interval HTTP nodes via cross-node references.
+// Works with "Split Into Items" ON (default N8N behaviour): each HTTP response
+// item is one individual candle. Symbol i's candles are collected by slice:
+//   resp.slice(i * limit, (i + 1) * limit)
+//
+// Interval identity is GUARANTEED by which HTTP node produced the response.
+// Symbol identity is derived from the Filter node order (= Bulk Requests Generator
+// order), which N8N preserves when processing items sequentially.
 //
 // Prerequisites in N8N:
-//   - 4 Filter Code nodes: "Filter 2h Requests", "Filter 1h Requests",
-//     "Filter 15m Requests", "Filter 1m Requests"
-//   - 4 HTTP nodes: "Binance 2h", "Binance 1h", "Binance 15m", "Binance 1m"
-//     Each with "Split Into Items" DISABLED so resp[i].json = full candles array.
-//   - Merge node (Append) combining all 4 HTTP outputs → triggers this node.
+//   - "Filter 2h Requests", "Filter 1h Requests", "Filter 15m Requests", "Filter 1m Requests"
+//   - "Binance 2h", "Binance 1h", "Binance 15m", "Binance 1m" (Split Into Items ON or OFF)
+//   - Merge1 (Append) combining all 4 → triggers this node.
 // =====================================================
 
 const REQUIRED_INTERVALS = ['2h', '1h', '15m', '1m'];
+const EXPECTED_GAP_MS    = { '2h': 7200000, '1h': 3600000, '15m': 900000, '1m': 60000 };
 
-// ── Read filter metadata (symbol ordering) and HTTP responses (candles) ──
-// Filter nodes output items in same order as Bulk Requests Generator.
-// HTTP nodes process items in that same order (N8N sequential execution).
-// With "Split Into Items" OFF: resp[i].json = Binance klines array for symbol i.
+// ── Read filter metadata (symbol ordering) and HTTP responses ──
 const sources = [
   { interval: '2h',  meta: $('Filter 2h Requests').all(),  resp: $('Binance 2h').all()  },
   { interval: '1h',  meta: $('Filter 1h Requests').all(),  resp: $('Binance 1h').all()  },
@@ -27,65 +27,77 @@ const sources = [
   { interval: '1m',  meta: $('Filter 1m Requests').all(),  resp: $('Binance 1m').all()  },
 ];
 
-const EXPECTED_GAP_MS = { '2h': 7200000, '1h': 3600000, '15m': 900000, '1m': 60000 };
-
-const candleMap = new Map(); // "BTCUSDT|2h" → { symbol, interval, candles[], ... }
+const candleMap = new Map();
 let errors = 0;
 
 // =====================================================
-// STEP 1: Build candle map from 4 separate interval sources
+// STEP 1: Build candle map — one entry per symbol|interval
 // =====================================================
 for (const { interval, meta, resp } of sources) {
   if (!meta.length) {
-    console.error(`❌ [A-03] Filter "${interval}" returned 0 items — upstream issue in Bulk Requests Generator`);
+    console.error(`❌ Filter "${interval}" returned 0 items — upstream issue`);
     errors++;
     continue;
   }
 
-  if (meta.length !== resp.length) {
+  // Detect whether HTTP node has "Split Into Items" ON or OFF.
+  // Split ON  → resp.length = meta.length × limit  (individual candles)
+  // Split OFF → resp.length = meta.length           (one full array per symbol)
+  const limit      = meta[0].json.limit;
+  const splitOn    = resp.length === meta.length * limit;
+  const splitOff   = resp.length === meta.length;
+
+  if (!splitOn && !splitOff) {
     console.error(
-      `❌ [A-03] ${interval}: ${meta.length} filter items but ${resp.length} HTTP responses — ` +
-      `request/response count mismatch, possible retry failure`
+      `❌ ${interval}: unexpected resp count ${resp.length} ` +
+      `(expected ${meta.length * limit} for Split ON or ${meta.length} for Split OFF)`
     );
     errors++;
-    // Process up to min(meta, resp) to recover partially
   }
 
-  const count = Math.min(meta.length, resp.length);
+  console.log(`📊 ${interval}: ${meta.length} symbols, ${resp.length} resp items, Split=${splitOn ? 'ON' : 'OFF'}`);
 
-  for (let i = 0; i < count; i++) {
-    const m       = meta[i].json;
-    const raw     = resp[i]?.json;
-    const key     = `${m.symbol}|${interval}`;
+  for (let i = 0; i < meta.length; i++) {
+    const m   = meta[i].json;
+    const key = `${m.symbol}|${interval}`;
 
-    // Binance klines format: [[openTime, open, high, low, close, volume, closeTime, ...], ...]
-    // With "Split Into Items" OFF on HTTP node, raw IS this array.
-    const candles = Array.isArray(raw) ? raw : [];
+    // ── Collect candles for symbol i ──
+    let candles;
+    if (splitOn) {
+      // Each candle is a separate item: slice [i*limit … (i+1)*limit)
+      candles = resp.slice(i * limit, (i + 1) * limit).map(r => r.json);
+    } else {
+      // Full candles array is in resp[i].json
+      const raw = resp[i]?.json;
+      candles   = Array.isArray(raw) ? raw : [];
+    }
 
     if (candles.length === 0) {
-      console.error(`❌ Empty candle response for ${key} — Binance returned no data`);
+      console.error(`❌ No candles for ${key}`);
       errors++;
     }
 
     // ── Candle count validation ──
-    if (candles.length !== m.limit) {
-      console.error(`❌ COUNT MISMATCH ${key}: expected ${m.limit}, got ${candles.length}`);
+    if (candles.length !== limit) {
+      console.error(`❌ COUNT MISMATCH ${key}: expected ${limit}, got ${candles.length}`);
       errors++;
     }
 
     // ── Interval timestamp-gap validation ──
-    // Confirms that the candles we received match the expected interval.
-    // With Option A this is redundant (interval is guaranteed by node), but kept as safety net.
     if (candles.length >= 2) {
-      const t0 = candles[0][0];
-      const t1 = candles[1][0];
-      const actualGap   = Math.abs(Number(t1) - Number(t0));
-      const expectedGap = EXPECTED_GAP_MS[interval];
-      if (expectedGap && Math.abs(actualGap - expectedGap) > expectedGap * 0.15) {
-        console.error(
-          `❌ INTERVAL_GAP_MISMATCH ${key}: expected ~${expectedGap}ms, got ${actualGap}ms`
-        );
-        errors++;
+      const c0 = candles[0];
+      const c1 = candles[1];
+      const t0 = Array.isArray(c0) ? c0[0] : c0.open_time;
+      const t1 = Array.isArray(c1) ? c1[0] : c1.open_time;
+      if (t0 !== undefined && t1 !== undefined) {
+        const actualGap   = Math.abs(Number(t1) - Number(t0));
+        const expectedGap = EXPECTED_GAP_MS[interval];
+        if (expectedGap && Math.abs(actualGap - expectedGap) > expectedGap * 0.15) {
+          console.error(
+            `❌ INTERVAL_GAP_MISMATCH ${key}: expected ~${expectedGap}ms, got ${actualGap}ms`
+          );
+          errors++;
+        }
       }
     }
 
@@ -93,21 +105,18 @@ for (const { interval, meta, resp } of sources) {
       symbol:          m.symbol,
       symbol_id:       m.symbol_id,
       interval,
-      limit:           m.limit,
+      limit,
       cycle_timestamp: m.cycle_timestamp,
       scan_cycle_id:   m.scan_cycle_id,
       candles,
     });
   }
-
-  console.log(`✅ ${interval}: matched ${count} symbols`);
 }
 
 // =====================================================
 // STEP 2: Completeness — every symbol must have all 4 intervals
 // =====================================================
-const symbolIntervals = new Map(); // symbol → Set<interval>
-
+const symbolIntervals = new Map();
 for (const key of candleMap.keys()) {
   const [sym, iv] = key.split('|');
   if (!symbolIntervals.has(sym)) symbolIntervals.set(sym, new Set());
@@ -115,7 +124,6 @@ for (const key of candleMap.keys()) {
 }
 
 const incompleteSymbols = new Set();
-
 for (const [sym, found] of symbolIntervals.entries()) {
   const missing = REQUIRED_INTERVALS.filter(iv => !found.has(iv));
   if (missing.length) {
@@ -125,10 +133,9 @@ for (const [sym, found] of symbolIntervals.entries()) {
 }
 
 // =====================================================
-// STEP 3: Build output (same structure as v3.0)
+// STEP 3: Build output (same structure as before)
 // =====================================================
 const groupedResponses = [];
-
 for (const [key, data] of candleMap.entries()) {
   const incomplete = incompleteSymbols.has(data.symbol);
   groupedResponses.push({
@@ -147,25 +154,23 @@ for (const [key, data] of candleMap.entries()) {
 }
 
 // =====================================================
-// STEP 4: Summary log
+// STEP 4: Summary
 // =====================================================
 const byInterval = {};
 groupedResponses.forEach(g => {
   byInterval[g.json.interval] = (byInterval[g.json.interval] || 0) + 1;
 });
 
-console.log(`\n✅ [Option A] Grouped ${groupedResponses.length} symbol|interval pairs`);
-console.log(`⚠️  Incomplete symbols : ${incompleteSymbols.size}`);
-console.log(`❌  Total errors       : ${errors}`);
-console.log('\n📊 Groups by interval:');
-Object.entries(byInterval).forEach(([iv, count]) => console.log(`  ${iv}: ${count}`));
+console.log(`\n✅ [Option A v4.1] Grouped ${groupedResponses.length} symbol|interval pairs`);
+console.log(`⚠️  Incomplete : ${incompleteSymbols.size} symbols`);
+console.log(`❌  Errors     : ${errors}`);
+console.log('📊 By interval:', Object.entries(byInterval).map(([k, v]) => `${k}:${v}`).join(', '));
 
 if (incompleteSymbols.size > 0) {
-  console.warn(`\n🚫 Excluded from TAAPI: ${[...incompleteSymbols].join(', ')}`);
+  console.warn(`🚫 Excluded from TAAPI: ${[...incompleteSymbols].join(', ')}`);
 }
-
 if (errors > 0) {
-  console.error(`\n🔴 CRITICAL: ${errors} error(s) — verify HTTP node config (Split Into Items = OFF)`);
+  console.error(`🔴 CRITICAL: ${errors} error(s) detected`);
 }
 
 return groupedResponses;
