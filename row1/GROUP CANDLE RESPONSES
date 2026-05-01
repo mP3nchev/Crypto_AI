@@ -90,6 +90,34 @@ for (let i = 0; i < requestKeys.length; i++) {
     }
   }
 
+  // ── A-03 Option B: INTERVAL TIMESTAMP-GAP VALIDATION ──
+  // Verifies that consecutive candle open_times match the expected interval duration.
+  // Catches silent interval swaps caused by HTTP response reordering after retry.
+  // NOTE (A-03): symbol-ordering swaps within the same interval remain undetected
+  // until Option A (4 separate HTTP nodes) is approved and implemented.
+  if (candles.length >= 2) {
+    const EXPECTED_GAP_MS = { '2h': 7200000, '1h': 3600000, '15m': 900000, '1m': 60000 };
+    const expectedGap = EXPECTED_GAP_MS[interval];
+    if (expectedGap) {
+      const c0 = candles[0];
+      const c1 = candles[1];
+      const t0 = Array.isArray(c0) ? c0[0] : c0.open_time;
+      const t1 = Array.isArray(c1) ? c1[0] : c1.open_time;
+      if (t0 !== undefined && t1 !== undefined) {
+        const actualGap = Math.abs(Number(t1) - Number(t0));
+        const tolerance  = expectedGap * 0.15;  // 15 % — accommodates DST boundaries
+        if (Math.abs(actualGap - expectedGap) > tolerance) {
+          console.error(
+            `❌ INTERVAL_GAP_MISMATCH ${key}: ` +
+            `expected ~${expectedGap}ms gap, got ${actualGap}ms. ` +
+            `Possible interval swap due to HTTP retry reordering.`
+          );
+          mappingErrors++;
+        }
+      }
+    }
+  }
+
   candleMap.set(key, candles);
 }
 

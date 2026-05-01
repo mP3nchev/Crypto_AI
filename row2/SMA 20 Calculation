@@ -8,7 +8,15 @@ console.log('📊 === SMA 20 CALCULATION START ===');
 const allCandles = $input.all();
 console.log(`Received ${allCandles.length} candle records`);
 
-const currentScanCycleId = ($input.first().json.scan_cycle_id || 1); 
+// A-02 FIX: read scan_cycle_id from upstream items, never generate here.
+// The || 1 fallback was producing numeric 1 as a cycle ID — removed.
+const currentScanCycleId = $input.first().json.scan_cycle_id || null;
+const currentCycleTimestamp = $input.first().json.cycle_timestamp || null;
+
+if (!currentScanCycleId) {
+  throw new Error('CRITICAL [A-02]: scan_cycle_id missing from candle items reaching SMA 20 Calculation.');
+}
+
 console.log(`Using scan_cycle_id: ${currentScanCycleId}`);
 
 // =====================================================
@@ -80,8 +88,8 @@ candlesBySymbol.forEach((candles, symbol) => {
     smaResults.push({
         symbol: symbol,
         sma_20: sma20,
-      scan_cycle_id: currentScanCycleId,
-       cycle_timestamp: new Date().toISOString(),
+        scan_cycle_id: currentScanCycleId,
+        cycle_timestamp: currentCycleTimestamp,
     });
 }); // <--- Тази скоба ЗАТВАРЯ цикъла candlesBySymbol.forEach
 

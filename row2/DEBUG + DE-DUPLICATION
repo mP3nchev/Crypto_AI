@@ -58,6 +58,13 @@ allCandles.forEach((item) => {
       low_price: candle.low_price,
       close_price: candle.close_price,
       volume: candle.volume,
+      // A-04 FIX: median volume fields were previously omitted, causing
+      // VOLUME SCORE CALCULATOR to fall back to cs_volume/24 estimation.
+      // Pass-through as zero when absent — never omit or default to null.
+      median_volume_1h: candle.median_volume_1h || 0,
+      median_volume_2h: candle.median_volume_2h || 0,
+      // Preserve 1m price if attached by EXTRACT 1M PRICES AND MERGE
+      latest_1m_price: candle.latest_1m_price || null,
     }
   });
 });
