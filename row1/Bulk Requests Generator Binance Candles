@@ -9,16 +9,24 @@ const symbols = $input.all();
 const allRequests = [];
 
 // =====================================================
-// CYCLE TRACKING
+// CYCLE TRACKING — A-02 FIX: single source of truth
+// scan_cycle_id originates in Crypto Symbols Metadata and
+// must propagate unchanged. Never regenerate here.
 // =====================================================
-const now = new Date();
-const cycle_timestamp = now.toISOString();
-const year = String(now.getFullYear());
-const month = String(now.getMonth() + 1).padStart(2, '0');
-const day = String(now.getDate()).padStart(2, '0');
-const hour = String(now.getHours()).padStart(2, '0');
-const minute = String(now.getMinutes()).padStart(2, '0');
-const scan_cycle_id = `${year}-${month}-${day}_${hour}:${minute}`;
+let scan_cycle_id = symbols[0]?.json?.scan_cycle_id;
+let cycle_timestamp = symbols[0]?.json?.cycle_timestamp;
+
+// Fallback: if PATCH HTTP node stripped the fields, read from
+// Crypto Symbols Metadata via cross-node reference.
+if (!scan_cycle_id) {
+  const metaItems = $('Crypto Symbols Metadata').all();
+  scan_cycle_id = metaItems[0]?.json?.scan_cycle_id;
+  cycle_timestamp = metaItems[0]?.json?.cycle_timestamp;
+}
+
+if (!scan_cycle_id) {
+  throw new Error('CRITICAL [A-02]: scan_cycle_id not found in input items or Crypto Symbols Metadata. Fix propagation upstream.');
+}
 
 console.log(`📈 Starting Binance candle requests for cycle: ${scan_cycle_id}`);
 

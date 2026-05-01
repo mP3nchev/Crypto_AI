@@ -1,7 +1,20 @@
+// A-05 FIX: filter to 2h interval only BEFORE grouping.
+// Without this filter, 1m and 15m candles (which have more recent open_time
+// values) dominate the top-20 sort, making SMA 20 mathematically meaningless.
+// All 1h, 15m, and 1m candles are excluded entirely from this node.
 const allCandles = $input.all();
+const only2h = allCandles.filter(item => item.json.interval === '2h');
+
+if (only2h.length === 0) {
+  console.error('CRITICAL [A-05]: No 2h candles reached Candles Grouping. Check upstream pipeline.');
+  return [];
+}
+
+console.log(`[A-05] Input candles: ${allCandles.length} total, ${only2h.length} after 2h filter`);
+
 const grouped = new Map();
 
-allCandles.forEach(item => {
+only2h.forEach(item => {
   const symbol = item.json.symbol;
   if (!grouped.has(symbol)) grouped.set(symbol, []);
   grouped.get(symbol).push(item.json);

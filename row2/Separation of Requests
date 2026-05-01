@@ -32,16 +32,14 @@ console.log('\nFirst item structure:');
 console.log(JSON.stringify(inputItems[0], null, 2));
 
 // =====================================================
-// CYCLE TRACKING
+// CYCLE TRACKING — A-02 FIX: read from upstream, never regenerate
 // =====================================================
-const now = new Date();
-const cycle_timestamp = now.toISOString();
-const year = now.getFullYear();
-const month = String(now.getMonth() + 1).padStart(2, '0');
-const day = String(now.getDate()).padStart(2, '0');
-const hour = String(now.getHours()).padStart(2, '0');
-const minute = String(now.getMinutes()).padStart(2, '0');
-const scan_cycle_id = `${year}-${month}-${day}_${hour}:${minute}`;
+const scan_cycle_id = inputItems[0].json.scan_cycle_id;
+const cycle_timestamp = inputItems[0].json.cycle_timestamp;
+
+if (!scan_cycle_id) {
+  throw new Error('CRITICAL [A-02]: scan_cycle_id missing from Merge SMA items. Upstream propagation broken.');
+}
 
 console.log(`\nCycle ID: ${scan_cycle_id}`);
 console.log(`Cycle timestamp: ${cycle_timestamp}`);
