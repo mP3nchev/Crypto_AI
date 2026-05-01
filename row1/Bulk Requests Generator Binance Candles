@@ -40,8 +40,8 @@ const requestGroups = [
     // GROUP 2: 1h candles (12 candles = 12h history) ✅ NEW: For median_volume_1h
     { name: 'Candles_1h_Median', interval: '1h', limit: 12 },
     
-    // GROUP 3: 15m candles (2 candles — limit=2 disambiguates 15m from 1m by candle count, A-03 Option B)
-    { name: 'Candles_15m', interval: '15m', limit: 2 },
+    // GROUP 3: 15m candles (1 candle for momentum)
+    { name: 'Candles_15m', interval: '15m', limit: 1 },
     
     // GROUP 4: 1m candles (1 candle for latest price) ✅ NEW: For real-time price
     { name: 'Candles_1m', interval: '1m', limit: 1 }
