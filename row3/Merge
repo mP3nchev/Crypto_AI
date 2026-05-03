@@ -89,20 +89,22 @@ SELECT
   COALESCE(input1.median_volume_2h, input2.median_volume_2h, input3.median_volume_2h, input4.median_volume_2h, input5.median_volume_2h) as median_volume_2h,
   
   -- =====================================================
-  -- MARKET CONDITION
+  -- MARKET CONDITION — [A-10] COALESCE sentinel: 'WEIGHTS_MISSING' when input1 (ADX branch) failed.
+  -- SCORE AGGREGATOR performs fail-fast check on this value — no signal emitted if 'WEIGHTS_MISSING'.
   -- =====================================================
-  input1.market_condition,
-  input1.adx_strength,
-  
+  COALESCE(input1.market_condition, 'WEIGHTS_MISSING') as market_condition,
+  COALESCE(input1.adx_strength,     'WEIGHTS_MISSING') as adx_strength,
+
   -- =====================================================
-  -- ADAPTIVE WEIGHTS
+  -- ADAPTIVE WEIGHTS — [A-10] sentinel -1 when input1 branch failed.
+  -- Any weight field <= 0 is treated as invalid in SCORE AGGREGATOR.
   -- =====================================================
-  input1.weight_momentum,
-  input1.weight_trend,
-  input1.weight_volatility,
-  input1.weight_volume,
-  input1.weight_price_action,
-  input1.weight_risk_reward,
+  COALESCE(input1.weight_momentum,     -1) as weight_momentum,
+  COALESCE(input1.weight_trend,        -1) as weight_trend,
+  COALESCE(input1.weight_volatility,   -1) as weight_volatility,
+  COALESCE(input1.weight_volume,       -1) as weight_volume,
+  COALESCE(input1.weight_price_action, -1) as weight_price_action,
+  COALESCE(input1.weight_risk_reward,  -1) as weight_risk_reward,
   
   -- =====================================================
   -- COMPONENT SCORES

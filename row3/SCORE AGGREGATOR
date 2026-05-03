@@ -64,19 +64,35 @@ const results = inputData.map((item, index) => {
   // STEP 2: EXTRACT ADAPTIVE WEIGHTS (RAW)
   // =====================================================
   console.log(`\n⚖️ STEP 2: Adaptive Weights Extraction`);
-  
-  const marketCondition = data.market_condition || 'NEUTRAL';
-  const adxStrength = data.adx_strength || 'NEUTRAL';
-  
-  // Extract raw weights (may include risk_reward which we don't use yet)
+
+  const marketCondition = data.market_condition;
+  const adxStrength = data.adx_strength;
+
+  // [A-10] FAIL-FAST: 'WEIGHTS_MISSING' sentinel means the ADX/Adaptive Weights branch
+  // (input1 in the Merge node) produced no output this cycle. Scoring with any default
+  // weights would produce a silent, invalid result — exclude the signal entirely.
+  if (marketCondition === 'WEIGHTS_MISSING' || adxStrength === 'WEIGHTS_MISSING') {
+    console.error(`[A-10] WEIGHTS_MISSING for ${data.symbol} — ADX/Adaptive Weights branch returned no data. Signal excluded.`);
+    return null;
+  }
+
+  // Extract raw weights — no silent defaults. Negative sentinel (-1) from Merge SQL is
+  // caught by the guard below; null/NaN is also treated as broken input.
   const rawWeights = {
-    momentum: parseFloat(data.weight_momentum || 0.25),
-    trend: parseFloat(data.weight_trend || 0.25),
-    volatility: parseFloat(data.weight_volatility || 0.20),
-    volume: parseFloat(data.weight_volume || 0.15),
-    price_action: parseFloat(data.weight_price_action || 0.10)
+    momentum:     parseFloat(data.weight_momentum),
+    trend:        parseFloat(data.weight_trend),
+    volatility:   parseFloat(data.weight_volatility),
+    volume:       parseFloat(data.weight_volume),
+    price_action: parseFloat(data.weight_price_action)
   };
-  
+
+  // [A-10] Guard: reject any signal whose weight fields are null, NaN, or the -1 sentinel.
+  const hasInvalidWeights = Object.values(rawWeights).some(w => w === null || isNaN(w) || w < 0);
+  if (hasInvalidWeights) {
+    console.error(`[A-10] INVALID WEIGHTS for ${data.symbol} — one or more weight fields are null, NaN, or negative. Signal excluded.`);
+    return null;
+  }
+
   console.log(`  Market Condition: ${marketCondition} (ADX: ${adxStrength})`);
   console.log(`  Raw Weights Received:`);
   console.log(`    Momentum:     ${(rawWeights.momentum * 100).toFixed(0)}%`);
@@ -484,5 +500,6 @@ console.log(`   - Score Floor: Applied in step 9`);
 
 // =====================================================
 // RETURN CLEAN OUTPUT
+// [A-10] filter(Boolean) removes nulls emitted by the WEIGHTS_MISSING / invalid-weights guard above.
 // =====================================================
-return results;
+return results.filter(Boolean);
