@@ -98,7 +98,22 @@ for (const item of inputData) {
  console.log('='.repeat(60));
   
   // Extract data
-  const currentPrice = parseFloat(data.latest_1m_price || data.current_price || data.close_price || 0);
+  // [T-06] Resolve current price with 3% deviation sanity check.
+  // If 1m price deviates >3% from 2h close, substitute close_price (safer for TP/SL math).
+  const raw1mPrice    = parseFloat(data.latest_1m_price) || 0;
+  const fallbackPrice = parseFloat(data.close_price || data.current_price || 0);
+  let currentPrice;
+  if (raw1mPrice > 0 && fallbackPrice > 0) {
+    const deviation = Math.abs(raw1mPrice - fallbackPrice) / fallbackPrice;
+    if (deviation > 0.03) {
+      console.warn(`[T-06] 1m price deviation ${(deviation * 100).toFixed(2)}% > 3% for ${symbol}: 1m=${raw1mPrice}, 2h_close=${fallbackPrice} — substituting close_price`);
+      currentPrice = fallbackPrice;
+    } else {
+      currentPrice = raw1mPrice;
+    }
+  } else {
+    currentPrice = raw1mPrice || fallbackPrice;
+  }
   const atr = parseFloat(data.current_atr_1h || 0);
   const tier = parseInt(data.tier || 2);
   const direction = data.signal_direction || 'NEUTRAL';

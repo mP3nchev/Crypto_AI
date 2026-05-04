@@ -34,6 +34,49 @@ if (inputData.length === 0) {
 }
 
 // =====================================================
+// [T-02] MOMENTUM DIRECTION CORRECTION MULTIPLIER
+// Applied post-weighting to penalize momentum score when it conflicts with signal direction.
+// SHORT: high momentum (bullish indicator) is contradictory — penalize progressively.
+// LONG:  low momentum (bearish indicator) is contradictory — mirror logic.
+// Raw momentum_score is NOT modified; only the weighted contribution is adjusted.
+// =====================================================
+function getMomentumCorrectionMultiplier(score, direction) {
+  if (direction === 'SHORT') {
+    if (score >= 75) return 0.35;
+    if (score >= 60) return 0.55;
+    if (score >= 50) return 0.80;
+    return 1.0;
+  }
+  if (direction === 'LONG') {
+    if (score <= 25) return 0.35;
+    if (score <= 40) return 0.55;
+    if (score <= 50) return 0.80;
+    return 1.0;
+  }
+  return 1.0; // NEUTRAL — no correction
+}
+
+// =====================================================
+// [T-03] VOLUME (OBV) DIRECTION CORRECTION MULTIPLIER
+// OBV is direction-aware: rising OBV confirms bullish, not bearish.
+// When direction=SHORT but OBV is strongly positive, reduce the volume contribution.
+// Ceiling 0.75 — avoids over-penalizing the direction-neutral 70/100 volume points.
+// =====================================================
+function getVolumeCorrectionMultiplier(score, direction, obv) {
+  if (direction === 'SHORT') {
+    if (obv > 1000000)  return 0.75;
+    if (obv > 500000)   return 0.85;
+    return 1.0;
+  }
+  if (direction === 'LONG') {
+    if (obv < -1000000) return 0.75;
+    if (obv < -500000)  return 0.85;
+    return 1.0;
+  }
+  return 1.0; // NEUTRAL — no correction
+}
+
+// =====================================================
 // PROCESS EACH SYMBOL
 // =====================================================
 const results = inputData.map((item, index) => {
@@ -139,16 +182,24 @@ const results = inputData.map((item, index) => {
   // =====================================================
   console.log(`\n🧮 STEP 4: Weighted Score Calculation`);
   
-  const weightedMomentum = momentumScore * weights.momentum;
-  const weightedTrend = trendScore * weights.trend;
-  const weightedVolatility = volatilityScore * weights.volatility;
-  const weightedVolume = volumeScore * weights.volume;
+  const signalDir = data.trend_direction || 'NEUTRAL';
+  const obv1h     = parseFloat(data.obv_1h || 0);
+
+  // [T-02] Momentum correction: penalize bullish momentum on SHORT signals (and vice versa)
+  const momentumCorrMult = getMomentumCorrectionMultiplier(momentumScore, signalDir);
+  // [T-03] Volume correction: penalize rising OBV on SHORT signals (and vice versa)
+  const volumeCorrMult   = getVolumeCorrectionMultiplier(volumeScore, signalDir, obv1h);
+
+  const weightedMomentum    = momentumScore    * weights.momentum    * momentumCorrMult;
+  const weightedTrend       = trendScore       * weights.trend;
+  const weightedVolatility  = volatilityScore  * weights.volatility;
+  const weightedVolume      = volumeScore      * weights.volume      * volumeCorrMult;
   const weightedPriceAction = priceActionScore * weights.price_action;
-  
-  console.log(`  Momentum:     ${momentumScore.toFixed(1)} × ${weights.momentum.toFixed(3)} = ${weightedMomentum.toFixed(2)}`);
+
+  console.log(`  Momentum:     ${momentumScore.toFixed(1)} × ${weights.momentum.toFixed(3)} × ${momentumCorrMult.toFixed(2)} (T-02 corr) = ${weightedMomentum.toFixed(2)}`);
   console.log(`  Trend:        ${trendScore.toFixed(1)} × ${weights.trend.toFixed(3)} = ${weightedTrend.toFixed(2)}`);
   console.log(`  Volatility:   ${volatilityScore.toFixed(1)} × ${weights.volatility.toFixed(3)} = ${weightedVolatility.toFixed(2)}`);
-  console.log(`  Volume:       ${volumeScore.toFixed(1)} × ${weights.volume.toFixed(3)} = ${weightedVolume.toFixed(2)}`);
+  console.log(`  Volume:       ${volumeScore.toFixed(1)} × ${weights.volume.toFixed(3)} × ${volumeCorrMult.toFixed(2)} (T-03 corr) = ${weightedVolume.toFixed(2)}`);
   console.log(`  Price Action: ${priceActionScore.toFixed(1)} × ${weights.price_action.toFixed(3)} = ${weightedPriceAction.toFixed(2)}`);
   
   // =====================================================
@@ -275,6 +326,11 @@ console.log(`  ═════════════════════�
       price_action: parseFloat(weightedPriceAction.toFixed(2))
     },
     
+    // Direction correction multipliers (T-02 + T-03 audit trail)
+    momentum_correction_multiplier: momentumCorrMult,
+    volume_correction_multiplier:   volumeCorrMult,
+    obv_1h_at_correction:           obv1h,
+
     // Total
     total_quality_score: parseFloat(totalScore.toFixed(2))
   };

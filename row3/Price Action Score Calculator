@@ -21,17 +21,24 @@ function calculatePriceActionScore(data) {
 // COMPONENT 1: VWAP ANALYSIS (50 points max)
 // =====================================================
 
+// [T-06] Use latest_1m_price for VWAP distance (more accurate during volatile periods).
+// The 1h close can lag by up to ~2h; the 1m price reflects the current market level,
+// which correctly classifies VWAP zones — especially the 0.3% chop-zone boundary.
+// Fallback: close_price (1h) when 1m price is absent or zero.
 const vwap_1h = parseFloat(data.vwap_1h);
-const close_price = parseFloat(data.close_price);  // 1h close от raw_candles_data
+const close_price    = parseFloat(data.close_price);  // 1h OHLC — used for Components 2 & 3
+const raw_1m         = parseFloat(data.latest_1m_price);
+const price_for_vwap = (raw_1m > 0) ? raw_1m : close_price;
+const priceSource    = (raw_1m > 0) ? '1m' : '1h_close(fallback)';  // for logging
 
-if (!isNaN(vwap_1h) && !isNaN(close_price) && vwap_1h > 0) {
+if (!isNaN(vwap_1h) && !isNaN(price_for_vwap) && vwap_1h > 0) {
   maxScore += 50;
-  
-  const vwapDistance = ((close_price - vwap_1h) / vwap_1h) * 100;
+
+  const vwapDistance    = ((price_for_vwap - vwap_1h) / vwap_1h) * 100;
   const vwapDistancePct = Math.abs(vwapDistance);
   const signalDirection = data.signal_direction || 'NEUTRAL';
   
-  console.log(`  📊 Price vs VWAP: ${vwapDistance.toFixed(2)}% (Signal: ${signalDirection})`);
+  console.log(`  📊 Price vs VWAP: ${vwapDistance.toFixed(2)}% | src=${priceSource} price=${price_for_vwap} (Signal: ${signalDirection})`);
   
   // 🆕 CHOP ZONE CHECK (applies to both LONG & SHORT)
   if (vwapDistancePct < 0.3) {
