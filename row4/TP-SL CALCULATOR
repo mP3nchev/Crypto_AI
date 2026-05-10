@@ -62,23 +62,23 @@ function getDynamicAllocation(trendScore, tier) {
     // STRONG trend - hold longer for bigger moves
     return {
       allocation: [40, 40, 20],
-      tp_ratios: [1.0, 2.0, getTierAdjustedTP3(tier)],
+      tp_ratios: [1.5, 2.0, getTierAdjustedTP3(tier)],
       strategy: 'STRONG_TREND'
     };
-    
+
   } else if (trendScore >= 50) {
     // MODERATE trend - balanced approach
     return {
       allocation: [50, 35, 15],
-      tp_ratios: [1.0, 2.0, 3.0],
+      tp_ratios: [1.3, 2.0, 3.0],
       strategy: 'MODERATE_TREND'
     };
-    
+
   } else {
-    // WEAK/RANGING - secure profits early
+    // WEAK/RANGING - secure profits early, reduce TP1 allocation to let more run to TP2
     return {
-      allocation: [60, 30, 10],
-      tp_ratios: [1.0, 1.5, 2.5],
+      allocation: [50, 35, 15],
+      tp_ratios: [1.2, 1.5, 2.5],
       strategy: 'WEAK_RANGING'
     };
   }
@@ -252,15 +252,11 @@ for (const item of inputData) {
   console.log(`     Weighted Avg: ${weightedRR.toFixed(2)}:1`);
   
   // =====================================================
-  // SUGGESTED LEVERAGE
+  // TIER LEVERAGE CAP (informational — leverage calculated in RISK-REWARD FILTER)
   // =====================================================
   const maxLev = MAX_LEVERAGE[tier] || 5;
-  const suggestedLeverage = Math.min(
-    Math.floor(10 / slDistancePct),
-    maxLev
-  );
-  
-  console.log(`\n  ⚡ Suggested Leverage: ${suggestedLeverage}x (max ${maxLev}x for Tier ${tier})`);
+
+  console.log(`\n  ⚡ Tier Max Leverage Cap: ${maxLev}x (Tier ${tier}) — final leverage computed in R/R Filter`);
   
   // =====================================================
   // BUILD OUTPUT
@@ -299,11 +295,10 @@ for (const item of inputData) {
       // Strategy info
       tp_strategy: dynamics.strategy,
       trend_score_used: trendScore,
-      
-      // Leverage
-      recommended_leverage: suggestedLeverage,
-      max_leverage_tier: maxLev,
-      
+
+      // Tier leverage cap (authoritative leverage in RISK-REWARD FILTER output)
+      tier_max_leverage: maxLev,
+
       // Distances
       sl_distance_pct: slDistancePct,
       tp1_distance_pct: tp1Pct,

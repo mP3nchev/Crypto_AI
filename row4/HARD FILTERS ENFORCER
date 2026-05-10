@@ -129,15 +129,13 @@ allSignals.forEach((signal, index) => {
         `Volume ratio ${volumeRatio.toFixed(2)} < ${HARD_FILTERS.MIN_VOLUME_RATIO} minimum`
     },
     risk_reward: {
-      passed: rrFilterPassed && feeAdjustedRR >= ({ 1: 1.5, 2: 2.0, 3: 2.5 }[tier] ?? 1.5),
+      passed: data.tpsl_calculated === true && (isNaN(feeAdjustedRR) ? 0 : (feeAdjustedRR ?? 0)) >= ({ 1: 1.5, 2: 2.0, 3: 2.5 }[tier] ?? 1.5),
       value: feeAdjustedRR,
       threshold: ({ 1: 1.5, 2: 2.0, 3: 2.5 }[tier] ?? 1.5),
-      flag_value: rrFilterPassed,
-      numeric_check: feeAdjustedRR >= ({ 1: 1.5, 2: 2.0, 3: 2.5 }[tier] ?? 1.5),
-      upstream_flag_override: rrFilterPassed && feeAdjustedRR < ({ 1: 1.5, 2: 2.0, 3: 2.5 }[tier] ?? 1.5),
-      reason: (rrFilterPassed && feeAdjustedRR >= ({ 1: 1.5, 2: 2.0, 3: 2.5 }[tier] ?? 1.5)) ? null :
-        !rrFilterPassed ? 'R/R filter not passed (step 5)' :
-        `fee_adjusted_rr ${feeAdjustedRR.toFixed(2)} < ${({ 1: 1.5, 2: 2.0, 3: 2.5 }[tier] ?? 1.5)} (Tier ${tier} floor)`
+      numeric_check: (isNaN(feeAdjustedRR) ? 0 : (feeAdjustedRR ?? 0)) >= ({ 1: 1.5, 2: 2.0, 3: 2.5 }[tier] ?? 1.5),
+      reason: (data.tpsl_calculated === true && (isNaN(feeAdjustedRR) ? 0 : (feeAdjustedRR ?? 0)) >= ({ 1: 1.5, 2: 2.0, 3: 2.5 }[tier] ?? 1.5)) ? null :
+        data.tpsl_calculated !== true ? 'tpsl_calculated is not true — R/R data cannot be trusted' :
+        `fee_adjusted_rr ${isNaN(feeAdjustedRR) ? 'NaN' : feeAdjustedRR.toFixed(2)} < ${({ 1: 1.5, 2: 2.0, 3: 2.5 }[tier] ?? 1.5)} (Tier ${tier} floor)`
     },
     entry_validation: {
       passed: isValidEntry,
@@ -177,7 +175,7 @@ allSignals.forEach((signal, index) => {
   console.log(`\n  🔍 Filter Results:`);
   console.log(`    ${filterChecks.score_floor.passed ? '✅' : '❌'} Score Floor: ${totalScore.toFixed(2)} ${filterChecks.score_floor.passed ? '≥' : '<'} ${dynamicScoreFloor} (Tier ${tier}, ADX ${adx.toFixed(1)})`);
   console.log(`    ${filterChecks.volume_ratio.passed ? '✅' : '❌'} Volume Ratio: ${volumeRatio.toFixed(2)} ${filterChecks.volume_ratio.passed ? '≥' : '<'} ${HARD_FILTERS.MIN_VOLUME_RATIO}`);
-  console.log(`    ${filterChecks.risk_reward.passed ? '✅' : '❌'} R/R Filter: ${rrFilterPassed ? 'Passed' : 'Failed'} (${feeAdjustedRR.toFixed(2)})`);
+  console.log(`    ${filterChecks.risk_reward.passed ? '✅' : '❌'} R/R Filter: ${isNaN(feeAdjustedRR) ? 'NaN' : feeAdjustedRR.toFixed(2)} vs ${filterChecks.risk_reward.threshold} floor (tpsl_calculated=${data.tpsl_calculated})`);
   console.log(`    ${filterChecks.entry_validation.passed ? '✅' : '❌'} Entry Validation: ${isValidEntry ? 'Valid' : 'Invalid'}`);
   console.log(`    ${filterChecks.entry_calculated.passed ? '✅' : '❌'} Entry Calculated: ${data.entry_calculated === true ? 'Yes' : data.entry_calculated === false ? 'No (atr=0)' : 'MISSING FLAG'}`);
   

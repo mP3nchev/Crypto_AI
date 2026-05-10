@@ -69,25 +69,34 @@ function calculateVolatilityScore(scanData, tier, atrThresholdLow, atrThresholdH
     components.atr_percentage = atrPercentage;
   }
   
-  // Bollinger Bands Width (40 points max)
+  // Bollinger Bands Width (40 points max) — tier-aware thresholds
   const bbw_1h = safeFloat(scanData.bbw_1h);
-  
+
   if (bbw_1h > 0) {
     maxScore += 40;
     let bbwScore = 0;
-    
-    if (bbw_1h <= 0.02) {
-      bbwScore = 25;
-    } else if (bbw_1h <= 0.05) {
-      bbwScore = 40;
-    } else if (bbw_1h <= 0.08) {
-      bbwScore = 30;
+
+    // Tier-specific BBW thresholds (BTC structurally lower BBW than altcoins)
+    const BBW_THRESHOLDS = {
+      1: { squeeze: 0.008, optimal: 0.015, elevated: 0.025 },
+      2: { squeeze: 0.015, optimal: 0.040, elevated: 0.070 },
+      3: { squeeze: 0.025, optimal: 0.060, elevated: 0.100 }
+    };
+    const bbwT = BBW_THRESHOLDS[tier] || BBW_THRESHOLDS[2];
+
+    if (bbw_1h <= bbwT.squeeze) {
+      bbwScore = 25;  // squeeze / LOW
+    } else if (bbw_1h <= bbwT.optimal) {
+      bbwScore = 40;  // OPTIMAL
+    } else if (bbw_1h <= bbwT.elevated) {
+      bbwScore = 30;  // elevated
     } else {
-      bbwScore = 15;
+      bbwScore = 15;  // extreme
     }
-    
+
     totalScore += bbwScore;
     components.bbw_contribution = bbwScore;
+    components.bbw_tier_thresholds = bbwT;
   }
   
   // Calculate final score (0-100)
