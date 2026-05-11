@@ -1,43 +1,28 @@
 // =====================================================
 // NODE 1: SCORE AGGREGATOR - PURE QUALITY CALCULATOR
 // =====================================================
-// Този node е САМО за изчисляване на Technical Quality Score
-// БЕЗ penalties, БЕЗ filters, БЕЗ disqualifications
-//
-// ПОЛУЧАВА (от Merge Node с 5 входа):
-// - INPUT1: ADX Market Condition + Adaptive Weights (weight_*, market_condition)
-// - INPUT2: Momentum Score (momentum_score, momentum_components)
-// - INPUT3: Volatility Score (volatility_score)
-// - INPUT4: Trend Score (trend_score, trend_components, trend_direction)
-// - INPUT5: Volume Score + Price Action (volume_score, price_action_score)
-//
-// ИЗЧИСЛЯВА:
-// - Weighted Sum на 5 Quality компонента
-// - Total Score = Quality метрика (0-100)
-//
-// НЕ ПРИЛАГА:
-// - ❌ Volume Penalties (следващ node)
-// - ❌ R/R Filters (стъпка 5)
-// - ❌ Score Floor (стъпка 9)
+// Input1: ADX Market Condition + Adaptive Weights
+// Input2: Momentum Score
+// Input3: Volatility Score
+// Input4: Trend Score
+// Input5: Volume Score + Price Action
 // =====================================================
 
-console.log('🎯 ═══════════════════════════════════════════════');
-console.log('   SCORE AGGREGATOR v2.0 - QUALITY CALCULATOR');
-console.log('═══════════════════════════════════════════════');
+console.log('SCORE AGGREGATOR v2.0 - QUALITY CALCULATOR');
 
 const inputData = $input.all();
-console.log(`📊 Processing ${inputData.length} merged signals`);
+console.log(`Processing ${inputData.length} merged signals`);
 
 if (inputData.length === 0) {
-  console.log('⚠️ No input data received');
+  console.log('No input data received');
   return [];
 }
 
 // =====================================================
 // [T-02] MOMENTUM DIRECTION CORRECTION MULTIPLIER
 // Applied post-weighting to penalize momentum score when it conflicts with signal direction.
-// SHORT: high momentum (bullish indicator) is contradictory — penalize progressively.
-// LONG:  low momentum (bearish indicator) is contradictory — mirror logic.
+// SHORT: high momentum (bullish indicator) is contradictory -- penalize progressively.
+// LONG:  low momentum (bearish indicator) is contradictory -- mirror logic.
 // Raw momentum_score is NOT modified; only the weighted contribution is adjusted.
 // =====================================================
 function getMomentumCorrectionMultiplier(score, direction) {
@@ -53,14 +38,14 @@ function getMomentumCorrectionMultiplier(score, direction) {
     if (score <= 50) return 0.80;
     return 1.0;
   }
-  return 1.0; // NEUTRAL — no correction
+  return 1.0; // NEUTRAL -- no correction
 }
 
 // =====================================================
 // [T-03] VOLUME (OBV) DIRECTION CORRECTION MULTIPLIER
 // OBV is direction-aware: rising OBV confirms bullish, not bearish.
 // When direction=SHORT but OBV is strongly positive, reduce the volume contribution.
-// Ceiling 0.75 — avoids over-penalizing the direction-neutral 70/100 volume points.
+// Ceiling 0.75 -- avoids over-penalizing the direction-neutral 70/100 volume points.
 // =====================================================
 function getVolumeCorrectionMultiplier(score, direction, obv) {
   if (direction === 'SHORT') {
@@ -73,7 +58,7 @@ function getVolumeCorrectionMultiplier(score, direction, obv) {
     if (obv < -500000)  return 0.85;
     return 1.0;
   }
-  return 1.0; // NEUTRAL — no correction
+  return 1.0; // NEUTRAL -- no correction
 }
 
 // =====================================================
@@ -82,45 +67,33 @@ function getVolumeCorrectionMultiplier(score, direction, obv) {
 const results = inputData.map((item, index) => {
   const data = item.json;
   
-  console.log(`\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━`);
-  console.log(`📋 Signal ${index + 1}/${inputData.length}: ${data.symbol}`);
-  console.log(`━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━`);
+  console.log(`\nSignal ${index + 1}/${inputData.length}: ${data.symbol}`);
   
   // =====================================================
   // STEP 1: EXTRACT COMPONENT SCORES (0-100)
   // =====================================================
-  console.log(`\n📊 STEP 1: Component Scores Extraction`);
-  
-  const momentumScore = parseFloat(data.momentum_score || 0);
-  const trendScore = parseFloat(data.trend_score || 0);
-  const volatilityScore = parseFloat(data.volatility_score || 0);
-  const volumeScore = parseFloat(data.volume_score || 0);
+  const momentumScore    = parseFloat(data.momentum_score || 0);
+  const trendScore       = parseFloat(data.trend_score || 0);
+  const volatilityScore  = parseFloat(data.volatility_score || 0);
+  const volumeScore      = parseFloat(data.volume_score || 0);
   const priceActionScore = parseFloat(data.price_action_score || 0);
   
-  console.log(`  Momentum:      ${momentumScore.toFixed(1)}/100`);
-  console.log(`  Trend:         ${trendScore.toFixed(1)}/100`);
-  console.log(`  Volatility:    ${volatilityScore.toFixed(1)}/100`);
-  console.log(`  Volume:        ${volumeScore.toFixed(1)}/100`);
-  console.log(`  Price Action:  ${priceActionScore.toFixed(1)}/100`);
+  console.log(`  Momentum: ${momentumScore.toFixed(1)} | Trend: ${trendScore.toFixed(1)} | Vol: ${volatilityScore.toFixed(1)} | Volume: ${volumeScore.toFixed(1)} | PA: ${priceActionScore.toFixed(1)}`);
   
   // =====================================================
   // STEP 2: EXTRACT ADAPTIVE WEIGHTS (RAW)
   // =====================================================
-  console.log(`\n⚖️ STEP 2: Adaptive Weights Extraction`);
-
   const marketCondition = data.market_condition;
   const adxStrength = data.adx_strength;
 
   // [A-10] FAIL-FAST: 'WEIGHTS_MISSING' sentinel means the ADX/Adaptive Weights branch
   // (input1 in the Merge node) produced no output this cycle. Scoring with any default
-  // weights would produce a silent, invalid result — exclude the signal entirely.
+  // weights would produce a silent, invalid result -- exclude the signal entirely.
   if (marketCondition === 'WEIGHTS_MISSING' || adxStrength === 'WEIGHTS_MISSING') {
-    console.error(`[A-10] WEIGHTS_MISSING for ${data.symbol} — ADX/Adaptive Weights branch returned no data. Signal excluded.`);
+    console.error(`[A-10] WEIGHTS_MISSING for ${data.symbol} -- ADX/Adaptive Weights branch returned no data. Signal excluded.`);
     return null;
   }
 
-  // Extract raw weights — no silent defaults. Negative sentinel (-1) from Merge SQL is
-  // caught by the guard below; null/NaN is also treated as broken input.
   const rawWeights = {
     momentum:     parseFloat(data.weight_momentum),
     trend:        parseFloat(data.weight_trend),
@@ -132,56 +105,24 @@ const results = inputData.map((item, index) => {
   // [A-10] Guard: reject any signal whose weight fields are null, NaN, or the -1 sentinel.
   const hasInvalidWeights = Object.values(rawWeights).some(w => w === null || isNaN(w) || w < 0);
   if (hasInvalidWeights) {
-    console.error(`[A-10] INVALID WEIGHTS for ${data.symbol} — one or more weight fields are null, NaN, or negative. Signal excluded.`);
+    console.error(`[A-10] INVALID WEIGHTS for ${data.symbol} -- one or more weight fields are null, NaN, or negative. Signal excluded.`);
     return null;
   }
 
-  console.log(`  Market Condition: ${marketCondition} (ADX: ${adxStrength})`);
-  console.log(`  Raw Weights Received:`);
-  console.log(`    Momentum:     ${(rawWeights.momentum * 100).toFixed(0)}%`);
-  console.log(`    Trend:        ${(rawWeights.trend * 100).toFixed(0)}%`);
-  console.log(`    Volatility:   ${(rawWeights.volatility * 100).toFixed(0)}%`);
-  console.log(`    Volume:       ${(rawWeights.volume * 100).toFixed(0)}%`);
-  console.log(`    Price Action: ${(rawWeights.price_action * 100).toFixed(0)}%`);
+  console.log(`  Market: ${marketCondition} (ADX: ${adxStrength})`);
   
   // =====================================================
   // STEP 3: NORMALIZE WEIGHTS TO 100%
   // =====================================================
-  // CRITICAL FIX: Adaptive Weights Calculator may include risk_reward weight
-  // which we don't use yet (R/R score calculated later in pipeline)
-  // So we normalize the 5 weights we DO use to sum to exactly 1.0 (100%)
-  
   const totalRawWeight = Object.values(rawWeights).reduce((sum, w) => sum + w, 0);
-  
-  console.log(`\n🔧 STEP 3: Weight Normalization`);
-  console.log(`  Raw Total: ${(totalRawWeight * 100).toFixed(1)}%`);
-  
-  if (totalRawWeight < 0.99 || totalRawWeight > 1.01) {
-    console.log(`  ⚠️ Weights don't sum to 100% - normalizing...`);
-  }
-  
-  // Normalize weights
   const weights = {};
   Object.keys(rawWeights).forEach(key => {
     weights[key] = rawWeights[key] / totalRawWeight;
   });
   
-  console.log(`  Normalized Weights (100% guaranteed):`);
-  console.log(`    Momentum:     ${(weights.momentum * 100).toFixed(1)}%`);
-  console.log(`    Trend:        ${(weights.trend * 100).toFixed(1)}%`);
-  console.log(`    Volatility:   ${(weights.volatility * 100).toFixed(1)}%`);
-  console.log(`    Volume:       ${(weights.volume * 100).toFixed(1)}%`);
-  console.log(`    Price Action: ${(weights.price_action * 100).toFixed(1)}%`);
-  
-  // Verify normalization
-  const totalNormalizedWeight = Object.values(weights).reduce((sum, w) => sum + w, 0);
-  console.log(`  ✅ Normalized Total: ${(totalNormalizedWeight * 100).toFixed(1)}%`);
-  
   // =====================================================
   // STEP 4: CALCULATE WEIGHTED COMPONENTS
   // =====================================================
-  console.log(`\n🧮 STEP 4: Weighted Score Calculation`);
-  
   const signalDir = data.trend_direction || 'NEUTRAL';
   const obv1h     = parseFloat(data.obv_1h || 0);
 
@@ -196,236 +137,112 @@ const results = inputData.map((item, index) => {
   const weightedVolume      = volumeScore      * weights.volume      * volumeCorrMult;
   const weightedPriceAction = priceActionScore * weights.price_action;
 
-  console.log(`  Momentum:     ${momentumScore.toFixed(1)} × ${weights.momentum.toFixed(3)} × ${momentumCorrMult.toFixed(2)} (T-02 corr) = ${weightedMomentum.toFixed(2)}`);
-  console.log(`  Trend:        ${trendScore.toFixed(1)} × ${weights.trend.toFixed(3)} = ${weightedTrend.toFixed(2)}`);
-  console.log(`  Volatility:   ${volatilityScore.toFixed(1)} × ${weights.volatility.toFixed(3)} = ${weightedVolatility.toFixed(2)}`);
-  console.log(`  Volume:       ${volumeScore.toFixed(1)} × ${weights.volume.toFixed(3)} × ${volumeCorrMult.toFixed(2)} (T-03 corr) = ${weightedVolume.toFixed(2)}`);
-  console.log(`  Price Action: ${priceActionScore.toFixed(1)} × ${weights.price_action.toFixed(3)} = ${weightedPriceAction.toFixed(2)}`);
-  
+  console.log(`  Momentum: ${momentumScore.toFixed(1)} x ${weights.momentum.toFixed(3)} x ${momentumCorrMult.toFixed(2)} (T-02) = ${weightedMomentum.toFixed(2)}`);
+  console.log(`  Trend:    ${trendScore.toFixed(1)} x ${weights.trend.toFixed(3)} = ${weightedTrend.toFixed(2)}`);
+  console.log(`  Volume:   ${volumeScore.toFixed(1)} x ${weights.volume.toFixed(3)} x ${volumeCorrMult.toFixed(2)} (T-03) = ${weightedVolume.toFixed(2)}`);
+
   // =====================================================
-// STEP 5: CALCULATE TOTAL QUALITY SCORE
-// =====================================================
-let totalScore = weightedMomentum + weightedTrend + weightedVolatility + 
-                 weightedVolume + weightedPriceAction;
+  // STEP 5: CALCULATE TOTAL QUALITY SCORE
+  // =====================================================
+  let totalScore = weightedMomentum + weightedTrend + weightedVolatility +
+                   weightedVolume + weightedPriceAction;
 
-console.log(`  ─────────────────────────────────────`);
-console.log(`  🎯 INITIAL TOTAL SCORE: ${totalScore.toFixed(2)}/100`);
+  // =====================================================
+  // STEP 5.5: MOMENTUM-TREND COHERENCE CHECK
+  // =====================================================
+  const scoreDifference = Math.abs(momentumScore - trendScore);
+  let coherencePenalty = 0;
+  let coherenceBonus = 0;
 
-// =====================================================
-// STEP 5.5: MOMENTUM-TREND COHERENCE CHECK
-// =====================================================
-console.log(`\n🔄 STEP 5.5: Coherence Check`);
+  if (scoreDifference > 20) {
+    coherencePenalty = -15;
+    console.log(`  CONFLICT: Scores differ by >20 pts -> -15 penalty`);
+  }
+  if (momentumScore >= 50 && trendScore >= 50 && scoreDifference <= 15) {
+    coherenceBonus = 5;
+    console.log(`  STRONG COHERENCE: Both high & aligned -> +5 bonus`);
+  }
 
-const scoreDifference = Math.abs(momentumScore - trendScore);
-console.log(`  Momentum vs Trend difference: ${scoreDifference.toFixed(1)} points`);
+  totalScore = Math.max(0, Math.min(100, totalScore + coherencePenalty + coherenceBonus));
+  console.log(`  FINAL TOTAL SCORE: ${totalScore.toFixed(2)}/100`);
 
-let coherencePenalty = 0;
-let coherenceBonus = 0;
-
-// Check for conflicting signals
-if (scoreDifference > 20) {
-  coherencePenalty = -15;
-  console.log(`  ⚠️ CONFLICT: Scores differ by >20 points → -15 penalty`);
-}
-
-// Bonus for strong alignment
-if (momentumScore >= 50 && trendScore >= 50 && scoreDifference <= 15) {
-  coherenceBonus = 5;
-  console.log(`  ✅ STRONG COHERENCE: Both scores high & aligned → +5 bonus`);
-}
-
-// Apply adjustments
-const coherenceAdjustment = coherencePenalty + coherenceBonus;
-const adjustedTotalScore = Math.max(0, Math.min(100, totalScore + coherenceAdjustment));
-
-if (coherenceAdjustment !== 0) {
-  console.log(`  Coherence adjustment: ${coherenceAdjustment > 0 ? '+' : ''}${coherenceAdjustment} points`);
-  console.log(`  Adjusted Total Score: ${adjustedTotalScore.toFixed(2)}/100`);
-} else {
-  console.log(`  ✅ No coherence adjustment needed`);
-}
-
-// 🔥 ВАЖНО: Apply coherence adjustments
-totalScore = adjustedTotalScore;
-
-console.log(`\n  ═════════════════════════════════════`);
-console.log(`  🎯 FINAL TOTAL SCORE: ${totalScore.toFixed(2)}/100`);
-console.log(`  ═════════════════════════════════════`);
-  
   // =====================================================
   // STEP 6: DETERMINE SIGNAL STRENGTH & DIRECTION
   // =====================================================
-  console.log(`\n🎖️ STEP 6: Signal Classification`);
-  
-  // Signal Direction (from Trend Component)
   const signalDirection = data.trend_direction || 'NEUTRAL';
-  
-  // Signal Strength (based on pure quality score)
-  let signalStrength = 'WEAK';
-  let confidenceLevel = 'LOW';
-  
-  if (totalScore >= 85) {
-    signalStrength = 'VERY_STRONG';
-    confidenceLevel = 'VERY_HIGH';
-  } else if (totalScore >= 75) {
-    signalStrength = 'STRONG';
-    confidenceLevel = 'HIGH';
-  } else if (totalScore >= 65) {
-    signalStrength = 'MEDIUM';
-    confidenceLevel = 'MEDIUM';
-  } else if (totalScore >= 50) {
-    signalStrength = 'WEAK';
-    confidenceLevel = 'LOW';
-  } else {
-    signalStrength = 'VERY_WEAK';
-    confidenceLevel = 'VERY_LOW';
-  }
-  
-  console.log(`  Direction:   ${signalDirection}`);
-  console.log(`  Strength:    ${signalStrength}`);
-  console.log(`  Confidence:  ${confidenceLevel}`);
-  
+  let signalStrength = 'VERY_WEAK';
+  let confidenceLevel = 'VERY_LOW';
+
+  if (totalScore >= 85)      { signalStrength = 'VERY_STRONG'; confidenceLevel = 'VERY_HIGH'; }
+  else if (totalScore >= 75) { signalStrength = 'STRONG';      confidenceLevel = 'HIGH'; }
+  else if (totalScore >= 65) { signalStrength = 'MEDIUM';      confidenceLevel = 'MEDIUM'; }
+  else if (totalScore >= 50) { signalStrength = 'WEAK';        confidenceLevel = 'LOW'; }
+
   // =====================================================
   // STEP 7: BUILD DETAILED SCORE BREAKDOWN
   // =====================================================
   const scoreBreakdown = {
-    // Raw component scores
-    raw_scores: {
-      momentum: momentumScore,
-      trend: trendScore,
-      volatility: volatilityScore,
-      volume: volumeScore,
-      price_action: priceActionScore
-    },
-    
-    // Applied weights (normalized)
-    weights: {
-      momentum: weights.momentum,
-      trend: weights.trend,
-      volatility: weights.volatility,
-      volume: weights.volume,
-      price_action: weights.price_action
-    },
-    
-    // Raw weights (before normalization - for debugging)
-    raw_weights: {
-      momentum: rawWeights.momentum,
-      trend: rawWeights.trend,
-      volatility: rawWeights.volatility,
-      volume: rawWeights.volume,
-      price_action: rawWeights.price_action,
-      raw_total: totalRawWeight
-    },
-    
-    // Weighted contributions
+    raw_scores: { momentum: momentumScore, trend: trendScore, volatility: volatilityScore, volume: volumeScore, price_action: priceActionScore },
+    weights: { momentum: weights.momentum, trend: weights.trend, volatility: weights.volatility, volume: weights.volume, price_action: weights.price_action },
+    raw_weights: { momentum: rawWeights.momentum, trend: rawWeights.trend, volatility: rawWeights.volatility, volume: rawWeights.volume, price_action: rawWeights.price_action, raw_total: totalRawWeight },
     weighted_scores: {
-      momentum: parseFloat(weightedMomentum.toFixed(2)),
-      trend: parseFloat(weightedTrend.toFixed(2)),
-      volatility: parseFloat(weightedVolatility.toFixed(2)),
-      volume: parseFloat(weightedVolume.toFixed(2)),
+      momentum:     parseFloat(weightedMomentum.toFixed(2)),
+      trend:        parseFloat(weightedTrend.toFixed(2)),
+      volatility:   parseFloat(weightedVolatility.toFixed(2)),
+      volume:       parseFloat(weightedVolume.toFixed(2)),
       price_action: parseFloat(weightedPriceAction.toFixed(2))
     },
-    
     // Direction correction multipliers (T-02 + T-03 audit trail)
     momentum_correction_multiplier: momentumCorrMult,
     volume_correction_multiplier:   volumeCorrMult,
     obv_1h_at_correction:           obv1h,
-
-    // Total
     total_quality_score: parseFloat(totalScore.toFixed(2))
   };
-  
-  // =====================================================
-  // STEP 8: BUILD OUTPUT OBJECT
-  // =====================================================
-  console.log(`\n✅ Quality Score Calculated - Passing to Volume Penalty Applicator`);
-  
+
   return {
     json: {
-      // ═══════════════════════════════════════════════
-      // CORE IDENTIFIERS
-      // ═══════════════════════════════════════════════
       symbol_id: data.symbol_id,
       symbol: data.symbol,
       scan_cycle_id: data.scan_cycle_id,
       cycle_timestamp: data.cycle_timestamp,
-      
-      // ═══════════════════════════════════════════════
-      // QUALITY SCORE (MAIN OUTPUT)
-      // ═══════════════════════════════════════════════
       total_score: parseFloat(totalScore.toFixed(2)),
       signal_strength: signalStrength,
       signal_direction: signalDirection,
       confidence_level: confidenceLevel,
-      
-      // ═══════════════════════════════════════════════
-      // COMPONENT SCORES (RAW - FOR AUDIT)
-      // ═══════════════════════════════════════════════
       momentum_score: momentumScore,
       trend_score: trendScore,
       volatility_score: volatilityScore,
       volume_score: volumeScore,
       price_action_score: priceActionScore,
-      
-      // ═══════════════════════════════════════════════
-      // WEIGHTED CONTRIBUTIONS (FOR DEBUGGING)
-      // ═══════════════════════════════════════════════
-      weighted_momentum: parseFloat(weightedMomentum.toFixed(2)),
-      weighted_trend: parseFloat(weightedTrend.toFixed(2)),
-      weighted_volatility: parseFloat(weightedVolatility.toFixed(2)),
-      weighted_volume: parseFloat(weightedVolume.toFixed(2)),
+      weighted_momentum:    parseFloat(weightedMomentum.toFixed(2)),
+      weighted_trend:       parseFloat(weightedTrend.toFixed(2)),
+      weighted_volatility:  parseFloat(weightedVolatility.toFixed(2)),
+      weighted_volume:      parseFloat(weightedVolume.toFixed(2)),
       weighted_price_action: parseFloat(weightedPriceAction.toFixed(2)),
-      
-      // ═══════════════════════════════════════════════
-      // DETAILED BREAKDOWN (COMPLETE AUDIT TRAIL)
-      // ═══════════════════════════════════════════════
       score_breakdown: scoreBreakdown,
-      
-      // ═══════════════════════════════════════════════
-      // MARKET CONDITION CONTEXT
-      // ═══════════════════════════════════════════════
       market_condition: marketCondition,
       adx_strength: adxStrength,
       adx_2h: parseFloat(data.adx_2h || 0),
-      
-      // ═══════════════════════════════════════════════
-      // APPLIED WEIGHTS (NORMALIZED - FOR REFERENCE)
-      // ═══════════════════════════════════════════════
       applied_weights: weights,
       weights_normalized: true,
       raw_weight_total: parseFloat(totalRawWeight.toFixed(4)),
-      
-      // ═══════════════════════════════════════════════
-      // TIER CLASSIFICATION (PASS-THROUGH)
-      // ═══════════════════════════════════════════════
       tier: data.tier,
       tier_name: data.tier_name,
       rank_position: data.rank_position,
       atr_threshold_low: data.atr_threshold_low,
       atr_threshold_high: data.atr_threshold_high,
-      
-      // ═══════════════════════════════════════════════
-      // VOLATILITY METADATA (PASS-THROUGH)
-      // ═══════════════════════════════════════════════
       current_atr_1h: data.current_atr_1h,
       atr_percentage_1h: data.atr_percentage_1h,
       volatility_status: data.volatility_status,
       volatility_warning: data.volatility_warning,
       risk_level: data.risk_level,
       max_suggested_leverage: data.max_suggested_leverage,
-      
-      // ═══════════════════════════════════════════════
-      // PRICE DATA (PASS-THROUGH)
-      // ═══════════════════════════════════════════════
       current_price: parseFloat(data.close_price || 0),
       close_price: parseFloat(data.close_price || 0),
       open_price: parseFloat(data.open_price || 0),
       high_price: parseFloat(data.high_price || 0),
       low_price: parseFloat(data.low_price || 0),
-      latest_1m_price: parseFloat(data.latest_1m_price || data.close_price || 0), 
-      // ═══════════════════════════════════════════════
-      // VOLUME METRICS (FOR NEXT NODE)
-      // ═══════════════════════════════════════════════
+      latest_1m_price: parseFloat(data.latest_1m_price || data.close_price || 0),
       volume_ratio: data.volume_ratio,
       volume_penalty: parseFloat(data.volume_penalty || 0),
       volume_status: data.volume_status,
@@ -433,18 +250,10 @@ console.log(`  ═════════════════════�
       quote_volume: data.quote_volume,
       candle_volume: data.candle_volume,
       median_volume_1h: parseFloat(data.median_volume_1h || 0),
-      median_volume_2h: parseFloat(data.median_volume_2h || 0), 
-      // ═══════════════════════════════════════════════
-      // COMPONENT DETAILS (FOR REFERENCE)
-      // ═══════════════════════════════════════════════
+      median_volume_2h: parseFloat(data.median_volume_2h || 0),
       momentum_components: data.momentum_components,
       trend_components: data.trend_components,
       price_structure: data.price_structure,
-      
-      // ═══════════════════════════════════════════════
-      // RAW INDICATORS (FULL PASS-THROUGH)
-      // ═══════════════════════════════════════════════
-      // 2h timeframe
       rsi_2h: data.rsi_2h,
       macd_value_2h: data.macd_value_2h,
       macd_signal_2h: data.macd_signal_2h,
@@ -456,8 +265,6 @@ console.log(`  ═════════════════════�
       stochrsi_d_2h: data.stochrsi_d_2h,
       willr_2h: data.willr_2h,
       mfi_2h: data.mfi_2h,
-      
-      // 1h timeframe
       rsi_1h: data.rsi_1h,
       atr_1h: data.atr_1h,
       bbw_1h: data.bbw_1h,
@@ -467,95 +274,17 @@ console.log(`  ═════════════════════�
       ema_50_1h: data.ema_50_1h,
       stochrsi_k_1h: data.stochrsi_k_1h,
       stochrsi_d_1h: data.stochrsi_d_1h,
-      
-      // 15m timeframe
       rsi_15m: data.rsi_15m,
       willr_15m: data.willr_15m,
-      
-      // SMA
       sma_20: data.sma_20,
-      
-      // ═══════════════════════════════════════════════
-      // TIMESTAMPS
-      // ═══════════════════════════════════════════════
       aggregated_at: new Date().toISOString(),
-      aggregator_version: 'Quality Calculator v2.1 (Normalized Weights)'
+      aggregator_version: 'Quality Calculator v2.1 (Normalized Weights + T-02/T-03 corrections)'
     }
   };
 });
 
-// =====================================================
-// SUMMARY STATISTICS
-// =====================================================
-console.log(`\n\n╔════════════════════════════════════════════════════╗`);
-console.log(`║     QUALITY SCORE AGGREGATION SUMMARY             ║`);
-console.log(`╚════════════════════════════════════════════════════╝`);
-console.log(`📊 Total Symbols Processed: ${results.length}`);
+console.log(`\nTotal Processed: ${results.length}`);
+console.log(`Excluded (null): ${results.filter(r => r === null).length}`);
 
-if (results.length > 0) {
-  const avgScore = results.reduce((sum, r) => sum + r.json.total_score, 0) / results.length;
-  const maxScore = Math.max(...results.map(r => r.json.total_score));
-  const minScore = Math.min(...results.map(r => r.json.total_score));
-  
-  console.log(`\n📈 Quality Score Statistics:`);
-  console.log(`  Average: ${avgScore.toFixed(2)}/100`);
-  console.log(`  Maximum: ${maxScore.toFixed(2)}/100`);
-  console.log(`  Minimum: ${minScore.toFixed(2)}/100`);
-  
-  // Weight normalization check
-  const needsNormalization = results.filter(r => r.json.raw_weight_total < 0.99 || r.json.raw_weight_total > 1.01).length;
-  if (needsNormalization > 0) {
-    console.log(`\n🔧 Weight Normalization Applied: ${needsNormalization} signals had non-100% weights`);
-  } else {
-    console.log(`\n✅ All signals had properly balanced weights (100%)`);
-  }
-  
-  // Signal strength distribution
-  const strengthDist = {
-    VERY_STRONG: results.filter(r => r.json.signal_strength === 'VERY_STRONG').length,
-    STRONG: results.filter(r => r.json.signal_strength === 'STRONG').length,
-    MEDIUM: results.filter(r => r.json.signal_strength === 'MEDIUM').length,
-    WEAK: results.filter(r => r.json.signal_strength === 'WEAK').length,
-    VERY_WEAK: results.filter(r => r.json.signal_strength === 'VERY_WEAK').length
-  };
-  
-  console.log(`\n🎖️ Signal Strength Distribution:`);
-  Object.entries(strengthDist).forEach(([strength, count]) => {
-    if (count > 0) {
-      console.log(`  ${strength}: ${count} signals`);
-    }
-  });
-  
-  // Market condition breakdown
-  const conditionDist = {};
-  results.forEach(r => {
-    const condition = r.json.market_condition;
-    conditionDist[condition] = (conditionDist[condition] || 0) + 1;
-  });
-  
-  console.log(`\n📊 Market Condition Breakdown:`);
-  Object.entries(conditionDist).forEach(([condition, count]) => {
-    console.log(`  ${condition}: ${count} symbols`);
-  });
-  
-  console.log(`\n🎯 Top 5 Quality Scores:`);
-  results
-    .sort((a, b) => b.json.total_score - a.json.total_score)
-    .slice(0, 5)
-    .forEach((r, i) => {
-      console.log(`  ${i + 1}. ${r.json.symbol}: ${r.json.total_score.toFixed(2)}/100 (${r.json.signal_strength}) ${r.json.signal_direction}`);
-    });
-}
-
-console.log(`\n✅ Quality Score Aggregation Complete`);
-console.log(`📤 Passing ${results.length} signals to Volume Penalty Applicator`);
-console.log(`\n💡 Note: No penalties or filters applied at this stage`);
-console.log(`   - Volume Penalty: Applied in next node`);
-console.log(`   - R/R Filter: Applied in step 5`);
-console.log(`   - Score Floor: Applied in step 9`);
-
-// =====================================================
-// RETURN CLEAN OUTPUT
-// [A-10] filter(Boolean) removes nulls emitted by the WEIGHTS_MISSING / invalid-weights guard above.
-// =====================================================
+// [A-10] filter(Boolean) removes nulls from WEIGHTS_MISSING / invalid-weights guard.
 return results.filter(Boolean);
