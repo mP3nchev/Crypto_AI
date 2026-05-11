@@ -3,7 +3,10 @@ const inputItems = $input.all();
 
 console.log(`📥 Total input items: ${inputItems.length}`);
 
-const requiredCandles = 36;
+// [A-08] FIX: was 36 — fetching 36 candles per symbol × 50 symbols = 1800 Binance calls
+// per cycle just for validation. One candle is sufficient to confirm the endpoint is active.
+// Symbols with too-short history are caught downstream in scoring.
+const requiredCandles = 1;
 const batchSize = 10;
 
 for (let i = 0; i < inputItems.length; i += batchSize) {
@@ -21,7 +24,7 @@ for (let i = 0; i < inputItems.length; i += batchSize) {
         qs: {
           symbol: symbol,
           interval: '2h',
-          limit: 36
+          limit: 1  // [A-08] FIX: was 36, minimal existence check only
         },
         json: true
       });

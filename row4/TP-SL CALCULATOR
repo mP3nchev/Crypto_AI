@@ -9,9 +9,9 @@
 // - Tier-adjusted TP3 for strong trends
 // =====================================================
 
-console.log('🎯 ╔════════════════════════════════════════════════╗');
+console.log('🎯 ╔══════════════════════════════════════════════╗');
 console.log('   TP/SL CALCULATOR v3.0 - Dynamic Allocation');
-console.log('╚════════════════════════════════════════════════╝');
+console.log('╚══════════════════════════════════════════════╝');
 
 const inputData = $input.all();
 console.log(`📊 Calculating TP/SL levels for ${inputData.length} symbols`);
@@ -25,41 +25,32 @@ if (inputData.length === 0) {
 // CONFIGURATION
 // =====================================================
 const TRADING_FEES = {
-  entry: 0.00055,   // 0.055% entry
-  exit: 0.00055,    // 0.055% exit
-  total: 0.0011     // 0.11% total
+  entry: 0.00055,
+  exit: 0.00055,
+  total: 0.0011
 };
 
-// Tier-specific SL multipliers (unchanged)
 const SL_MULTIPLIERS = {
-  1: 1.5,  // Tier 1: Conservative (BTC, ETH)
-  2: 2.0,  // Tier 2: Moderate (ASTER, LINK)
-  3: 2.5   // Tier 3: Aggressive (Shitcoins)
+  1: 1.5,
+  2: 2.0,
+  3: 2.5
 };
 
-// Tier-specific leverage caps (unchanged)
 const MAX_LEVERAGE = {
   1: 10,
   2: 7,
   3: 5
 };
 
-// =====================================================
-// HELPER: GET TIER-ADJUSTED TP3 RATIO
-// =====================================================
 function getTierAdjustedTP3(tier) {
-  if (tier === 1) return 2.5;  // Conservative
-  if (tier === 2) return 3.5;  // Balanced
-  if (tier === 3) return 4.5;  // Aggressive
-  return 3.0;  // Default fallback
+  if (tier === 1) return 2.5;
+  if (tier === 2) return 3.5;
+  if (tier === 3) return 4.5;
+  return 3.0;
 }
 
-// =====================================================
-// HELPER: GET DYNAMIC ALLOCATION & RATIOS
-// =====================================================
 function getDynamicAllocation(trendScore, tier) {
   if (trendScore >= 70) {
-    // STRONG trend - hold longer for bigger moves
     return {
       allocation: [40, 40, 20],
       tp_ratios: [1.5, 2.0, getTierAdjustedTP3(tier)],
@@ -67,7 +58,6 @@ function getDynamicAllocation(trendScore, tier) {
     };
 
   } else if (trendScore >= 50) {
-    // MODERATE trend - balanced approach
     return {
       allocation: [50, 35, 15],
       tp_ratios: [1.3, 2.0, 3.0],
@@ -84,9 +74,6 @@ function getDynamicAllocation(trendScore, tier) {
   }
 }
 
-// =====================================================
-// PROCESS EACH SYMBOL
-// =====================================================
 const results = [];
 
 for (const item of inputData) {
@@ -95,14 +82,29 @@ for (const item of inputData) {
   
   console.log(`\n${'='.repeat(60)}`);
   console.log(`📊 ${symbol} - TP/SL Calculation`);
- console.log('='.repeat(60));
+  console.log('='.repeat(60));
   
-  // Extract data
-  const currentPrice = parseFloat(data.latest_1m_price || data.current_price || data.close_price || 0);
+  // [T-06] Resolve current price with 3% deviation sanity check.
+  // If 1m price deviates >3% from 2h close, substitute close_price (safer for TP/SL math).
+  const raw1mPrice    = parseFloat(data.latest_1m_price) || 0;
+  const fallbackPrice = parseFloat(data.close_price || data.current_price || 0);
+  let currentPrice;
+  if (raw1mPrice > 0 && fallbackPrice > 0) {
+    const deviation = Math.abs(raw1mPrice - fallbackPrice) / fallbackPrice;
+    if (deviation > 0.03) {
+      console.warn(`[T-06] 1m price deviation ${(deviation * 100).toFixed(2)}% > 3% for ${symbol}: 1m=${raw1mPrice}, 2h_close=${fallbackPrice} -- substituting close_price`);
+      currentPrice = fallbackPrice;
+    } else {
+      currentPrice = raw1mPrice;
+    }
+  } else {
+    currentPrice = raw1mPrice || fallbackPrice;
+  }
+
   const atr = parseFloat(data.current_atr_1h || 0);
   const tier = parseInt(data.tier || 2);
   const direction = data.signal_direction || 'NEUTRAL';
-  const trendScore = parseFloat(data.trend_score || 50);  // Default 50 if missing
+  const trendScore = parseFloat(data.trend_score || 50);
   const totalScore = parseFloat(data.total_score || 0);
   
   console.log(`  Price (1m): $${currentPrice.toFixed(8)}`);
@@ -111,9 +113,8 @@ for (const item of inputData) {
   console.log(`  Direction: ${direction}`);
   console.log(`  Trend Score: ${trendScore}/100`);
   
-  // Validation
   if (currentPrice <= 0 || atr <= 0 || !['LONG', 'SHORT'].includes(direction)) {
-    console.log(`  ❌ SKIP: Invalid data (price=${currentPrice}, atr=${atr}, dir=${direction})`);
+    console.log(`  SKIP: Invalid data (price=${currentPrice}, atr=${atr}, dir=${direction})`);
     results.push({
       json: {
         ...data,
@@ -124,106 +125,68 @@ for (const item of inputData) {
     continue;
   }
   
-  // =====================================================
-  // DYNAMIC ALLOCATION BASED ON TREND SCORE
-  // =====================================================
   const dynamics = getDynamicAllocation(trendScore, tier);
   
-  console.log(`\n  📈 Strategy: ${dynamics.strategy}`);
-  console.log(`  📊 Allocation: ${dynamics.allocation.join('/')}%`);
-  console.log(`  🎯 TP Ratios: ${dynamics.tp_ratios.join('/')}`);
+  console.log(`\n  Strategy: ${dynamics.strategy}`);
+  console.log(`  Allocation: ${dynamics.allocation.join('/')}%`);
+  console.log(`  TP Ratios: ${dynamics.tp_ratios.join('/')}`);
   
-  // =====================================================
-  // CALCULATE STOP LOSS (Tier-based ATR)
-  // =====================================================
   const slMultiplier = SL_MULTIPLIERS[tier] || 2.0;
   let stopLoss;
   
   if (direction === 'LONG') {
     stopLoss = currentPrice - (atr * slMultiplier);
-  } else {  // SHORT
+  } else {
     stopLoss = currentPrice + (atr * slMultiplier);
   }
   
   const slDistance = Math.abs(currentPrice - stopLoss);
   const slDistancePct = (slDistance / currentPrice) * 100;
   
-  console.log(`\n  🛡️ Stop Loss:`);
-  console.log(`     SL: $${stopLoss.toFixed(8)}`);
-  console.log(`     Distance: ${slDistancePct.toFixed(2)}% (${slMultiplier}x ATR)`);
-  
-  // =====================================================
-  // CALCULATE TAKE PROFITS (Risk-based R/R ratios)
-  // =====================================================
   const risk = Math.abs(stopLoss - currentPrice);
-  
   let tp1, tp2, tp3;
   
   if (direction === 'LONG') {
     tp1 = currentPrice + (risk * dynamics.tp_ratios[0]);
     tp2 = currentPrice + (risk * dynamics.tp_ratios[1]);
     tp3 = currentPrice + (risk * dynamics.tp_ratios[2]);
-    
-  } else {  // SHORT
+  } else {
     tp1 = currentPrice - (risk * dynamics.tp_ratios[0]);
     tp2 = currentPrice - (risk * dynamics.tp_ratios[1]);
     tp3 = currentPrice - (risk * dynamics.tp_ratios[2]);
   }
   
-  const tp1Distance = Math.abs(tp1 - currentPrice);
-  const tp2Distance = Math.abs(tp2 - currentPrice);
-  const tp3Distance = Math.abs(tp3 - currentPrice);
+  const tp1Pct = (Math.abs(tp1 - currentPrice) / currentPrice) * 100;
+  const tp2Pct = (Math.abs(tp2 - currentPrice) / currentPrice) * 100;
+  const tp3Pct = (Math.abs(tp3 - currentPrice) / currentPrice) * 100;
   
-  const tp1Pct = (tp1Distance / currentPrice) * 100;
-  const tp2Pct = (tp2Distance / currentPrice) * 100;
-  const tp3Pct = (tp3Distance / currentPrice) * 100;
-  
-  console.log(`\n  🎯 Take Profits:`);
-  console.log(`     TP1: $${tp1.toFixed(8)} (${tp1Pct.toFixed(2)}%) [R/R ${dynamics.tp_ratios[0]}:1] - ${dynamics.allocation[0]}%`);
-  console.log(`     TP2: $${tp2.toFixed(8)} (${tp2Pct.toFixed(2)}%) [R/R ${dynamics.tp_ratios[1]}:1] - ${dynamics.allocation[1]}%`);
-  console.log(`     TP3: $${tp3.toFixed(8)} (${tp3Pct.toFixed(2)}%) [R/R ${dynamics.tp_ratios[2]}:1] - ${dynamics.allocation[2]}%`);
-  
-  // =====================================================
-  // CALCULATE RISK/REWARD RATIOS (with fees)
-  // =====================================================
-  // =====================================================
-  // CALCULATE RISK/REWARD RATIOS (with fees) - v3.1 SHORT FIX
-  // entry_price в payload = currentPrice (raw) — не се пипа
-  // effEntry/effSL/effTP са LOCAL — само за R/R математика
-  // =====================================================
   let effEntry, effSL, effTP1, effTP2, effTP3;
   let riskWithFees, rewardTP1, rewardTP2, rewardTP3;
 
   if (direction === 'LONG') {
-    // LONG: купуваш entry (плащаш повече), продаваш TP/SL (получаваш по-малко)
     effEntry = currentPrice * (1 + TRADING_FEES.entry);
     effSL    = stopLoss * (1 - TRADING_FEES.exit);
     effTP1   = tp1 * (1 - TRADING_FEES.exit);
     effTP2   = tp2 * (1 - TRADING_FEES.exit);
     effTP3   = tp3 * (1 - TRADING_FEES.exit);
-
-    riskWithFees = effEntry - effSL;    // позитивно: entry > SL за LONG
-    rewardTP1    = effTP1   - effEntry; // позитивно: TP > entry за LONG
-    rewardTP2    = effTP2   - effEntry;
-    rewardTP3    = effTP3   - effEntry;
-
+    riskWithFees = effEntry - effSL;
+    rewardTP1    = effTP1 - effEntry;
+    rewardTP2    = effTP2 - effEntry;
+    rewardTP3    = effTP3 - effEntry;
   } else {
-    // SHORT: продаваш entry (получаваш по-малко), купуваш обратно TP/SL (плащаш повече)
     effEntry = currentPrice * (1 - TRADING_FEES.entry);
     effSL    = stopLoss * (1 + TRADING_FEES.exit);
     effTP1   = tp1 * (1 + TRADING_FEES.exit);
     effTP2   = tp2 * (1 + TRADING_FEES.exit);
     effTP3   = tp3 * (1 + TRADING_FEES.exit);
-
-    riskWithFees = effSL    - effEntry; // позитивно: SL > entry за SHORT
-    rewardTP1    = effEntry - effTP1;   // позитивно: entry > TP за SHORT
+    riskWithFees = effSL - effEntry;
+    rewardTP1    = effEntry - effTP1;
     rewardTP2    = effEntry - effTP2;
     rewardTP3    = effEntry - effTP3;
   }
 
-  // Guard: ако risk е 0 или отрицателен — данните са корумпирани
   if (riskWithFees <= 0) {
-    console.log(`  ❌ SKIP: riskWithFees=${riskWithFees.toFixed(8)} — fee-adjusted risk invalid`);
+    console.log(`  SKIP: riskWithFees=${riskWithFees.toFixed(8)} -- fee-adjusted risk invalid`);
     results.push({
       json: {
         ...data,
@@ -238,7 +201,6 @@ for (const item of inputData) {
   const rrTP2 = rewardTP2 / riskWithFees;
   const rrTP3 = rewardTP3 / riskWithFees;
   
-  // Weighted average R/R
   const weightedRR = (
     rrTP1 * (dynamics.allocation[0] / 100) +
     rrTP2 * (dynamics.allocation[1] / 100) +
@@ -258,41 +220,28 @@ for (const item of inputData) {
 
   console.log(`\n  ⚡ Tier Max Leverage Cap: ${maxLev}x (Tier ${tier}) — final leverage computed in R/R Filter`);
   
-  // =====================================================
-  // BUILD OUTPUT
-  // =====================================================
   results.push({
     json: {
-      ...data,  // Keep all previous data
-      
-      // TP/SL Levels
+      ...data,
       entry_price: currentPrice,
       stop_loss: stopLoss,
       take_profit: tp2,
       take_profit_1: tp1,
       take_profit_2: tp2,
       take_profit_3: tp3,
-      
-      // Allocations
       tp1_allocation: dynamics.allocation[0],
       tp2_allocation: dynamics.allocation[1],
       tp3_allocation: dynamics.allocation[2],
-      
-      // R/R Ratios
       tp1_rr: rrTP1,
       tp2_rr: rrTP2,
       tp3_rr: rrTP3,
       weighted_rr: weightedRR,
-      fee_adjusted_rr: weightedRR, 
+      fee_adjusted_rr: weightedRR,
       weighted_rr_ratio: weightedRR,
-
-      //FOR RISK/REWARD SCORE COMPATIBILITY
       fee_adjusted_rr_tp1: rrTP1,
       fee_adjusted_rr_tp2: rrTP2,
       fee_adjusted_rr_tp3: rrTP3,
       fee_adjusted_rr_tp4: 0,
-     
-      // Strategy info
       tp_strategy: dynamics.strategy,
       trend_score_used: trendScore,
 
@@ -304,37 +253,19 @@ for (const item of inputData) {
       tp1_distance_pct: tp1Pct,
       tp2_distance_pct: tp2Pct,
       tp3_distance_pct: tp3Pct,
-      
-      // Validation
       tp_sl_valid: true,
-      tpsl_calculated: true,
+      tpsl_calculated: true
     }
   });
   
-  console.log(`\n  ✅ TP/SL calculation complete`);
+  console.log(`\n  TP/SL calculation complete`);
 }
 
-// =====================================================
-// SUMMARY
-// =====================================================
 console.log(`\n${'='.repeat(60)}`);
-console.log(`📊 TP/SL CALCULATION SUMMARY`);
-console.log('='.repeat(60));  
+console.log(`TP/SL CALCULATION SUMMARY`);
 console.log(`  Total processed: ${results.length}`);
 console.log(`  Valid: ${results.filter(r => r.json.tp_sl_valid).length}`);
 console.log(`  Invalid: ${results.filter(r => !r.json.tp_sl_valid).length}`);
-
-const strategies = {
-  STRONG_TREND: results.filter(r => r.json.tp_strategy === 'STRONG_TREND').length,
-  MODERATE_TREND: results.filter(r => r.json.tp_strategy === 'MODERATE_TREND').length,
-  WEAK_RANGING: results.filter(r => r.json.tp_strategy === 'WEAK_RANGING').length
-};
-
-console.log(`\n  📈 Strategies:`);
-console.log(`     Strong Trend: ${strategies.STRONG_TREND}`);
-console.log(`     Moderate: ${strategies.MODERATE_TREND}`);
-console.log(`     Weak/Ranging: ${strategies.WEAK_RANGING}`);
-
-console.log(`\n✅ TP/SL Calculator v3.0 complete\n`);
+console.log(`\nTP/SL Calculator v3.0 complete\n`);
 
 return results;

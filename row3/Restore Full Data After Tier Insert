@@ -179,7 +179,10 @@ const restoredData = tierInsertResults.map(tierItem => {
       current_atr_1h: tierData.current_atr_1h,
       atr_percentage_1h: tierData.atr_percentage_1h,
       volatility_status: tierData.volatility_status,
-      volatility_score: tierData.volatility_score,
+      // [T-08] volatility_score NOT propagated from tierData.
+      // Volatility Score Calculator1 (Branch 3) is the sole authoritative producer.
+      // Propagating ATR Analyzer's DB-stored value here created a non-deterministic race
+      // where Branch 3 had to overwrite it. Score Aggregator reads from Merge input3 only.
       volatility_warning: tierData.volatility_warning,
       risk_level: tierData.risk_level,
       max_suggested_leverage: tierData.max_suggested_leverage,

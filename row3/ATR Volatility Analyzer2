@@ -120,15 +120,17 @@ const processedResults = tierResults.map(item => {
   
   return {
     json: {
-      ...data, // ✅ Запазваме всички данни
+      ...data, // Запазваме всички данни
       
       // ATR Analysis Results
+      // [T-08] volatility_score intentionally NOT output here.
+      // Volatility Score Calculator1 (Branch 3) is the sole authoritative producer of
+      // volatility_score. This node provides only metadata fields for Prepare Tier Data.
       current_atr_1h: atr1h,
       atr_percentage_1h: atrPercentage1h,
       volatility_status: volatilityStatus,
-      volatility_score: volatilityScore,
       volatility_warning: volatilityWarning,
-      
+
       // Risk Profile
       risk_level: riskLevel,
       max_suggested_leverage: maxSuggestedLeverage,

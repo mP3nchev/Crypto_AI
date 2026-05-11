@@ -21,80 +21,71 @@ function calculatePriceActionScore(data) {
 // COMPONENT 1: VWAP ANALYSIS (50 points max)
 // =====================================================
 
+// [T-06] Use latest_1m_price for VWAP distance (more accurate during volatile periods).
+// The 1h close can lag by up to ~2h; the 1m price reflects the current market level,
+// which correctly classifies VWAP zones -- especially the 0.3% chop-zone boundary.
+// Fallback: close_price (1h) when 1m price is absent or zero.
 const vwap_1h = parseFloat(data.vwap_1h);
-const close_price = parseFloat(data.close_price);  // 1h close от raw_candles_data
+const close_price    = parseFloat(data.close_price);  // 1h OHLC -- used for Components 2 & 3
+const raw_1m         = parseFloat(data.latest_1m_price);
+const price_for_vwap = (raw_1m > 0) ? raw_1m : close_price;
+const priceSource    = (raw_1m > 0) ? '1m' : '1h_close(fallback)';  // for logging
 
-if (!isNaN(vwap_1h) && !isNaN(close_price) && vwap_1h > 0) {
+if (!isNaN(vwap_1h) && !isNaN(price_for_vwap) && vwap_1h > 0) {
   maxScore += 50;
-  
-  const vwapDistance = ((close_price - vwap_1h) / vwap_1h) * 100;
+
+  const vwapDistance    = ((price_for_vwap - vwap_1h) / vwap_1h) * 100;
   const vwapDistancePct = Math.abs(vwapDistance);
   const signalDirection = data.signal_direction || 'NEUTRAL';
   
-  console.log(`  📊 Price vs VWAP: ${vwapDistance.toFixed(2)}% (Signal: ${signalDirection})`);
+  console.log(`  VWAP Distance: ${vwapDistance.toFixed(2)}% | src=${priceSource} price=${price_for_vwap} (Signal: ${signalDirection})`);
   
-  // 🆕 CHOP ZONE CHECK (applies to both LONG & SHORT)
   if (vwapDistancePct < 0.3) {
-    // Price too close to VWAP - dangerous ranging/sideways zone
-    totalScore += 10; // Minimal points for chop zone
-    console.log(`  ⚠️ CHOP ZONE: Price within 0.3% of VWAP → only +10 points`);
-    console.log(`     This indicates potential ranging/sideways movement`);
+    totalScore += 10;
+    console.log(`  CHOP ZONE: Price within 0.3% of VWAP -> only +10 points`);
     
   } else if (vwapDistancePct <= 0.5) {
-    // Near VWAP but outside chop zone
     totalScore += 40;
-    console.log(`  ✅ Near VWAP (outside chop): +40 points`);
+    console.log(`  Near VWAP (outside chop): +40 points`);
     
   } else if (vwapDistancePct <= 2) {
-    // Within 2% of VWAP - check direction alignment
-    
     if (signalDirection === 'LONG' && vwapDistance > 0) {
-      // LONG signal with price above VWAP = Perfect alignment
       totalScore += 50;
-      console.log(`  ✅ LONG above VWAP (bullish alignment): +50 points`);
-      
+      console.log(`  LONG above VWAP (bullish alignment): +50 points`);
     } else if (signalDirection === 'SHORT' && vwapDistance < 0) {
-      // SHORT signal with price below VWAP = Perfect alignment
       totalScore += 50;
-      console.log(`  ✅ SHORT below VWAP (bearish alignment): +50 points`);
-      
+      console.log(`  SHORT below VWAP (bearish alignment): +50 points`);
     } else if (signalDirection === 'LONG' && vwapDistance < 0) {
-      // LONG signal but price below VWAP = Contradiction
       totalScore += 30;
-      console.log(`  ⚠️ LONG below VWAP (weak setup): +30 points`);
-      
+      console.log(`  LONG below VWAP (weak setup): +30 points`);
     } else if (signalDirection === 'SHORT' && vwapDistance > 0) {
-      // SHORT signal but price above VWAP = Contradiction
       totalScore += 30;
-      console.log(`  ⚠️ SHORT above VWAP (weak setup): +30 points`);
-      
+      console.log(`  SHORT above VWAP (weak setup): +30 points`);
     } else {
-      // Neutral or unknown direction
       totalScore += 35;
-      console.log(`  ➡️ VWAP position: +35 points`);
+      console.log(`  VWAP position: +35 points`);
     }
     
   } else if (vwapDistancePct > 3) {
-    // Too far from VWAP (overextended)
     totalScore += 20;
-    console.log(`  ⚠️ Far from VWAP (>3%): +20 points (overextended)`);
+    console.log(`  Far from VWAP (>3%): +20 points (overextended)`);
     
   } else {
-    // Between 2-3% distance
     totalScore += 30;
-    console.log(`  ➡️ Moderate distance from VWAP: +30 points`);
+    console.log(`  Moderate distance from VWAP: +30 points`);
   }
   
 } else {
-  console.log(`  ⚠️ VWAP or close_price missing`);
+  console.log(`  VWAP or price missing`);
 }
+
   // =====================================================
   // COMPONENT 2: CANDLE STRUCTURE (30 points max)
   // =====================================================
   
-  const open_price = parseFloat(data.open_price);    // 1h open
-  const high_price = parseFloat(data.high_price);    // 1h high
-  const low_price = parseFloat(data.low_price);      // 1h low
+  const open_price = parseFloat(data.open_price);
+  const high_price = parseFloat(data.high_price);
+  const low_price = parseFloat(data.low_price);
   
   if (!isNaN(open_price) && !isNaN(high_price) && !isNaN(low_price) && !isNaN(close_price)) {
     maxScore += 30;
@@ -104,23 +95,23 @@ if (!isNaN(vwap_1h) && !isNaN(close_price) && vwap_1h > 0) {
     const bodyRatio = candleRange > 0 ? candleBody / candleRange : 0;
     const isBullish = close_price > open_price;
     
-    console.log(`  🕯️ Candle: ${isBullish ? 'Bullish' : 'Bearish'} | Body: ${(bodyRatio * 100).toFixed(0)}%`);
+    console.log(`  Candle: ${isBullish ? 'Bullish' : 'Bearish'} | Body: ${(bodyRatio * 100).toFixed(0)}%`);
     
     if (bodyRatio >= 0.7) {
       totalScore += 30;
-      console.log(`  ✅ Strong candle: +30 points`);
+      console.log(`  Strong candle: +30 points`);
     } else if (bodyRatio >= 0.5) {
       totalScore += 25;
-      console.log(`  ✅ Moderate: +25 points`);
+      console.log(`  Moderate: +25 points`);
     } else if (bodyRatio >= 0.3) {
       totalScore += 15;
-      console.log(`  ⚠️ Indecision: +15 points`);
+      console.log(`  Indecision: +15 points`);
     } else {
       totalScore += 10;
-      console.log(`  ⚠️ Doji: +10 points`);
+      console.log(`  Doji: +10 points`);
     }
   } else {
-    console.log(`  ⚠️ Candle data incomplete`);
+    console.log(`  Candle data incomplete`);
   }
   
   // =====================================================
@@ -134,13 +125,13 @@ if (!isNaN(vwap_1h) && !isNaN(close_price) && vwap_1h > 0) {
     
     if (close_price > ema_20_1h) {
       totalScore += 20;
-      console.log(`  ✅ Above EMA20: +20 points`);
+      console.log(`  Above EMA20: +20 points`);
     } else {
       totalScore += 10;
-      console.log(`  ⚠️ Below EMA20: +10 points`);
+      console.log(`  Below EMA20: +10 points`);
     }
   } else {
-    console.log(`  ⚠️ EMA20 missing`);
+    console.log(`  EMA20 missing`);
   }
   
   // =====================================================
@@ -150,7 +141,7 @@ if (!isNaN(vwap_1h) && !isNaN(close_price) && vwap_1h > 0) {
   const finalScore = maxScore > 0 ? Math.round((totalScore / maxScore) * 100) : 0;
   const priceStructure = close_price > vwap_1h ? 'BULLISH' : 'BEARISH';
   
-  console.log(`  🎯 Price Action Score: ${finalScore}/100 (${priceStructure})`);
+  console.log(`  Price Action Score: ${finalScore}/100 (${priceStructure})`);
   
   return {
     score: finalScore,
