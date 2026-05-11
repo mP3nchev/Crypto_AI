@@ -38,9 +38,9 @@ const TIER_MIN_RR = {
 
 // TIER-SPECIFIC MAX LEVERAGE
 const TIER_MAX_LEVERAGE = {
-  1: 10,   // Tier 1: Conservative (BTC, ETH)
-  2: 7.5,  // Tier 2: Moderate (Large Alts)
-  3: 5     // Tier 3: Aggressive (Small Alts)
+  1: 10,  // Tier 1: Conservative (BTC, ETH)
+  2: 7,   // Tier 2: Moderate (Large Alts)
+  3: 5    // Tier 3: Aggressive (Small Alts)
 };
 
 // R/R BONUS THRESHOLDS
@@ -119,8 +119,10 @@ const minRR = TIER_MIN_RR[tier] ?? 1.5;
   // =====================================================
   // CALCULATE RECOMMENDED LEVERAGE
   // =====================================================
-  // Target risk: 1-2% of capital per trade
-  const targetRiskPct = tier === 1 ? 1.0 : tier === 2 ? 1.5 : 2.0;
+  // Target risk % per trade: higher-quality tiers absorb more risk with tighter SL
+  // Tier 1=2.0% (BTC/ETH tight SL → needs higher risk % to get useful leverage)
+  // Tier 2=1.5%, Tier 3=1.0% (wider SL → lower risk % keeps leverage safe)
+  const targetRiskPct = tier === 1 ? 2.0 : tier === 2 ? 1.5 : 1.0;
   
   // Leverage = Target Risk % / SL Distance %
   const calculatedLeverage = slDistancePct > 0 ? targetRiskPct / slDistancePct : 0;
@@ -220,6 +222,7 @@ inputData.forEach((item, index) => {
         // LEVERAGE RECOMMENDATION
         // ═══════════════════════════════════════════════
         recommended_leverage: filterResult.recommended_leverage,
+        leverage_at_minimum: filterResult.leverage_at_minimum,
         leverage_calculation: filterResult.leverage_calculation,
         
         // ═══════════════════════════════════════════════
