@@ -120,7 +120,7 @@ const processedResults = tierResults.map(item => {
   
   return {
     json: {
-      ...data, // ✅ Запазваме всички данни
+      ...data, // Запазваме всички данни
       
       // ATR Analysis Results
       // [T-08] volatility_score intentionally NOT output here.
