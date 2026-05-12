@@ -1,6 +1,7 @@
 // =====================================================
 // BRANCH 1.1: ASSET TIER CALCULATOR
-// Определя tier на база rank_position (1-10, 11-40, 41+)
+// Определя tier на база rank_position (1-5, 6-15, 16-20)
+// Execution Plan v2 — A-09: boundaries corrected for Top 20 context
 // =====================================================
 
 console.log('🎯 === ASSET TIER CALCULATOR START ===');
@@ -9,13 +10,15 @@ const scanResults = $input.all();
 console.log(`Processing ${scanResults.length} symbols for tier classification`);
 
 // =====================================================
-// TIER CONFIGURATION (FIXED: Кратки имена)
+// TIER CONFIGURATION — Top 20 boundaries (A-09 fix)
+// Previously: 1-10 / 11-40 / 41-150 — Tier 3 was unreachable with 20 symbols
+// Now:         1-5  / 6-15  / 16-20  — all three tiers reachable
 // =====================================================
 
 const TIER_CONFIG = {
-  1: { name: 'Tier 1', rank_range: [1, 10], atr_low: 3, atr_high: 6 },
-  2: { name: 'Tier 2', rank_range: [11, 40], atr_low: 6, atr_high: 10 },
-  3: { name: 'Tier 3', rank_range: [41, 150], atr_low: 10, atr_high: 15 }
+  1: { name: 'Tier 1', rank_range: [1, 5],  atr_low: 3,  atr_high: 6  },
+  2: { name: 'Tier 2', rank_range: [6, 15], atr_low: 6,  atr_high: 10 },
+  3: { name: 'Tier 3', rank_range: [16, 20], atr_low: 10, atr_high: 15 }
 };
 
 // =====================================================
@@ -23,10 +26,14 @@ const TIER_CONFIG = {
 // =====================================================
 
 function assignTier(rankPosition) {
-  const rank = parseInt(rankPosition) || 999;
-  
-  if (rank >= 1 && rank <= 10) return 1;
-  if (rank >= 11 && rank <= 40) return 2;
+  const rank = parseInt(rankPosition);
+  // Null / NaN → conservative Tier 3 (per A-09 spec)
+  if (!rank || isNaN(rank)) return 3;
+
+  if (rank >= 1  && rank <= 5)  return 1;
+  if (rank >= 6  && rank <= 15) return 2;
+  if (rank >= 16 && rank <= 20) return 3;
+  // Any rank outside 1-20 (e.g. future expansion) → Tier 3 conservative fallback
   return 3;
 }
 
@@ -70,9 +77,9 @@ const tierCounts = processedResults.reduce((acc, item) => {
 
 console.log(`\n🎯 === TIER CLASSIFICATION SUMMARY ===`);
 console.log(`📊 Total symbols processed: ${processedResults.length}`);
-console.log(`🥇 Tier 1 (Major): ${tierCounts[1] || 0} symbols`);
-console.log(`🥈 Tier 2 (Large Alt): ${tierCounts[2] || 0} symbols`);
-console.log(`🥉 Tier 3 (Small Alt): ${tierCounts[3] || 0} symbols`);
+console.log(`🥇 Tier 1 (rank 1-5):   ${tierCounts[1] || 0} symbols`);
+console.log(`🥈 Tier 2 (rank 6-15):  ${tierCounts[2] || 0} symbols`);
+console.log(`🥉 Tier 3 (rank 16-20): ${tierCounts[3] || 0} symbols`);
 console.log(`🔄 Cycle: ${processedResults[0]?.json?.scan_cycle_id || 'N/A'}`);
 
 if (processedResults.length === 0) {
