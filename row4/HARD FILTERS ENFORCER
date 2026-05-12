@@ -94,12 +94,11 @@ allSignals.forEach((signal, index) => {
   const symbol = data.symbol;
   const totalScore = parseFloat(data.total_score || 0);
   const volumeRatio = parseFloat(data.volume_ratio || 0);
-  const rrFilterPassed = data.rr_filter_passed === true;
   const isValidEntry = data.is_valid_entry === true;
   const feeAdjustedRR = parseFloat(data.fee_adjusted_rr || 0);
   const tier = parseInt(data.tier || 2);
   const adx = parseFloat(data.adx_2h || 0);
-  
+
   console.log(`  📊 Metrics:`);
   console.log(`     Tier: ${tier}`);
   console.log(`     ADX: ${adx.toFixed(1)}`);
@@ -107,7 +106,6 @@ allSignals.forEach((signal, index) => {
   console.log(`     → Dynamic Score Floor: ${dynamicScoreFloor}`);
   console.log(`     Volume Ratio: ${volumeRatio.toFixed(2)}`);
   console.log(`     Fee-Adjusted R/R: ${feeAdjustedRR.toFixed(2)}`);
-  console.log(`     R/R Filter Passed: ${rrFilterPassed ? 'Yes' : 'No'}`);
   console.log(`     Entry Validation: ${isValidEntry ? 'Valid' : 'Invalid'}`);
   
   // =====================================================
@@ -128,6 +126,7 @@ allSignals.forEach((signal, index) => {
       reason: volumeRatio >= HARD_FILTERS.MIN_VOLUME_RATIO ? null : 
         `Volume ratio ${volumeRatio.toFixed(2)} < ${HARD_FILTERS.MIN_VOLUME_RATIO} minimum`
     },
+    // [R-04] SYNC REQUIRED: thresholds below must match TIER_MIN_RR in RISK-REWARD FILTER.
     risk_reward: {
       passed: data.tpsl_calculated === true && (isNaN(feeAdjustedRR) ? 0 : (feeAdjustedRR ?? 0)) >= ({ 1: 1.5, 2: 2.0, 3: 2.5 }[tier] ?? 1.5),
       value: feeAdjustedRR,

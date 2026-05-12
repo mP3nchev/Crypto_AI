@@ -30,6 +30,8 @@ if (inputData.length === 0) {
 // =====================================================
 // FILTER CONFIGURATION
 // =====================================================
+// [R-04] SYNC REQUIRED: identical table exists in HARD FILTERS ENFORCER (risk_reward check).
+// Any change to these values MUST be applied to both nodes simultaneously.
 const TIER_MIN_RR = {
   1: 1.5,  // BTC/ETH — tight SL, реалистично постижим TP
   2: 2.0,  // mid-caps — по-широк SL, нужен по-далечен TP
