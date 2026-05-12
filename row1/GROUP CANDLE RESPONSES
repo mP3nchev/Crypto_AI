@@ -50,9 +50,11 @@ for (const { interval, meta, resp } of sources) {
   if (!splitOn && !splitOff) {
     console.error(
       `❌ ${interval}: unexpected resp count ${resp.length} ` +
-      `(expected ${meta.length * limit} for Split ON or ${meta.length} for Split OFF)`
+      `(expected ${meta.length * limit} for Split ON or ${meta.length} for Split OFF) — ` +
+      `skipping entire interval to prevent positional symbol mismatch`
     );
     errors++;
+    continue; // [R-05] Abort interval — positional integrity cannot be guaranteed
   }
 
   console.log(`📊 ${interval}: ${meta.length} symbols, ${resp.length} resp items, Split=${splitOn ? 'ON' : 'OFF'}`);
@@ -60,6 +62,7 @@ for (const { interval, meta, resp } of sources) {
   for (let i = 0; i < meta.length; i++) {
     const m   = meta[i].json;
     const key = `${m.symbol}|${interval}`;
+    let symbolValid = true; // [R-05] Track per-symbol validity before writing to candleMap
 
     // ── Collect candles for symbol i ──
     let candles;
@@ -75,12 +78,14 @@ for (const { interval, meta, resp } of sources) {
     if (candles.length === 0) {
       console.error(`❌ No candles for ${key}`);
       errors++;
+      symbolValid = false;
     }
 
     // ── Candle count validation ──
     if (candles.length !== limit) {
       console.error(`❌ COUNT MISMATCH ${key}: expected ${limit}, got ${candles.length}`);
       errors++;
+      symbolValid = false;
     }
 
     // ── Interval timestamp-gap validation ──
@@ -97,9 +102,13 @@ for (const { interval, meta, resp } of sources) {
             `❌ INTERVAL_GAP_MISMATCH ${key}: expected ~${expectedGap}ms, got ${actualGap}ms`
           );
           errors++;
+          symbolValid = false;
         }
       }
     }
+
+    // [R-05] Only store validated candles — corrupted data must not enter the pipeline
+    if (!symbolValid) continue;
 
     candleMap.set(key, {
       symbol:          m.symbol,
