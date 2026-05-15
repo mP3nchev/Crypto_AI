@@ -239,7 +239,12 @@ allSignals.forEach((signal, index) => {
         total_score: totalScore,
         volume_ratio: volumeRatio,
         fee_adjusted_rr: feeAdjustedRR,
-        rr_filter_passed: rrFilterPassed,
+        // [W-01] rr_filter_passed must read from upstream data (RISK-REWARD FILTER
+        // sets this flag on every signal it forwards). The previous reference to a
+        // local rrFilterPassed variable was a ReferenceError — node crashed at the
+        // first rejected signal, so the pipeline only ever produced output in
+        // cycles where every candidate happened to pass every filter.
+        rr_filter_passed: data.rr_filter_passed === true,
         is_valid_entry: isValidEntry,
         adx_2h: adx,
         

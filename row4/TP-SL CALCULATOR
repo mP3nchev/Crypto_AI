@@ -42,6 +42,20 @@ const MAX_LEVERAGE = {
   3: 5
 };
 
+// [T-08] LIQUIDATION-SAFE MINIMUM SL DISTANCE (per tier, % of entry price)
+// Rationale: Binance USDT-perp liquidation buffer + funding + slippage typically
+// consumes 0.3–0.5% of price at 5–10x leverage. When ATR × SL_multiplier produces
+// a tighter SL than this, the user's "stop loss" sits inside the liquidation
+// envelope — a wick can liquidate the position before the stop can fire.
+// We widen SL outward to the floor; risk grows, but R/R ratios are preserved
+// (TPs scale with risk), R/R Filter recomputes leverage on the larger slDist%
+// (smaller leverage = safer), and the trade plan stays internally consistent.
+const MIN_SL_DISTANCE_PCT = {
+  1: 0.5,  // BTC/ETH — exchange liquidation buffer realistic at 10x
+  2: 0.8,  // mid-caps — wider spreads, more wick-hunting
+  3: 1.2   // altcoins — thin books, stop-hunt prone
+};
+
 function getTierAdjustedTP3(tier) {
   if (tier === 1) return 2.5;
   if (tier === 2) return 3.5;
@@ -133,15 +147,34 @@ for (const item of inputData) {
   
   const slMultiplier = SL_MULTIPLIERS[tier] || 2.0;
   let stopLoss;
-  
+
   if (direction === 'LONG') {
     stopLoss = currentPrice - (atr * slMultiplier);
   } else {
     stopLoss = currentPrice + (atr * slMultiplier);
   }
-  
-  const slDistance = Math.abs(currentPrice - stopLoss);
-  const slDistancePct = (slDistance / currentPrice) * 100;
+
+  let slDistance = Math.abs(currentPrice - stopLoss);
+  let slDistancePct = (slDistance / currentPrice) * 100;
+
+  // [T-08] Enforce tier liquidation-safe minimum SL distance.
+  // If ATR-derived SL is tighter than the floor, widen outward. Risk increases,
+  // but R/R ratios are preserved because TP math below uses `risk` directly.
+  const minSlPct = MIN_SL_DISTANCE_PCT[tier] ?? MIN_SL_DISTANCE_PCT[2];
+  let slFloorApplied = false;
+  if (slDistancePct < minSlPct) {
+    const widenedDistance = currentPrice * (minSlPct / 100);
+    if (direction === 'LONG') {
+      stopLoss = currentPrice - widenedDistance;
+    } else {
+      stopLoss = currentPrice + widenedDistance;
+    }
+    slDistance = widenedDistance;
+    const previousPct = slDistancePct;
+    slDistancePct = minSlPct;
+    slFloorApplied = true;
+    console.log(`  [T-08] SL widened to liquidation-safe floor: ${previousPct.toFixed(3)}% → ${minSlPct}% (Tier ${tier})`);
+  }
   
   const risk = Math.abs(stopLoss - currentPrice);
   let tp1, tp2, tp3;
@@ -247,6 +280,10 @@ for (const item of inputData) {
 
       // Tier leverage cap (authoritative leverage in RISK-REWARD FILTER output)
       tier_max_leverage: maxLev,
+
+      // [T-08] Audit trail for liquidation-safe SL floor
+      sl_floor_applied: slFloorApplied,
+      sl_floor_pct: minSlPct,
 
       // Distances
       sl_distance_pct: slDistancePct,

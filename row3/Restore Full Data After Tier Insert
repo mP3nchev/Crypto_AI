@@ -133,18 +133,30 @@ console.log('\n');
 // STEP 4: MERGE - Full Data + Tier Info + Medians + 1m Price ✅ UPDATED
 // =====================================================
 
+const skippedNoFullData = [];
+
 const restoredData = tierInsertResults.map(tierItem => {
   const tierData = tierItem.json;
   const symbol = tierData.symbol;
-  
+
   // Find matching full data
   const matchingFull = fullDataSource.find(
     fullItem => fullItem.json.symbol === symbol
   );
-  
+
+  // [A-01] Exclude symbols without matching ATR Analyzer record.
+  // Previously this returned tierItem (tier metadata only, no TAAPI/price fields),
+  // which propagated as a phantom signal: all 5 scoring branches produced 0 because
+  // their input indicators were missing, the coherence penalty (-15) auto-triggered,
+  // and a malformed VERY_WEAK record entered the ranking/diversification math.
+  // Root cause: tier insert succeeded for a symbol whose ATR Analyzer output was
+  // lost (cross-row reference returned a smaller set). Correct behaviour is to drop
+  // the symbol from this cycle — Score Aggregator's A-02 guard would catch it
+  // later, but doing it here keeps audit logs and statistics clean.
   if (!matchingFull) {
-    console.warn(`⚠️ WARNING: No matching full data for ${symbol}`);
-    return tierItem; // Return tier data only
+    console.error(`❌ [A-01] No matching full data for ${symbol} — excluding from this cycle to prevent phantom signal propagation`);
+    skippedNoFullData.push(symbol);
+    return null;
   }
   
   const fullData = matchingFull.json;
@@ -203,15 +215,22 @@ const restoredData = tierInsertResults.map(tierItem => {
   };
 });
 
+// [A-01] Drop nulls produced when a tier-inserted symbol had no ATR Analyzer match
+const restoredDataClean = restoredData.filter(r => r !== null);
+
+if (skippedNoFullData.length > 0) {
+  console.error(`🔴 [A-01] Excluded ${skippedNoFullData.length} symbol(s) without full data: ${skippedNoFullData.join(', ')}`);
+}
+
 // =====================================================
 // STEP 5: VALIDATION ✅ UPDATED
 // =====================================================
 
 console.log(`\n📊 === RESTORE SUMMARY ===`);
-console.log(`Total restored: ${restoredData.length} records`);
+console.log(`Total restored: ${restoredDataClean.length} records (excluded: ${skippedNoFullData.length})`);
 
 // Check if all have critical fields
-const sampleRecord = restoredData[0]?.json;
+const sampleRecord = restoredDataClean[0]?.json;
 if (sampleRecord) {
   const criticalFields = ['rsi_2h', 'adx_2h', 'macd_value_2h', 'vwap_1h', 'close_price'];
   const missingFields = criticalFields.filter(field => !sampleRecord[field]);
@@ -234,15 +253,15 @@ if (sampleRecord) {
 }
 
 // Count statistics
-const withMedian1h = restoredData.filter(r => r.json.median_volume_1h > 0).length;
-const withMedian2h = restoredData.filter(r => r.json.median_volume_2h > 0).length;
-const with1mPrice = restoredData.filter(r => r.json.latest_1m_price > 0).length;
+const withMedian1h = restoredDataClean.filter(r => r.json.median_volume_1h > 0).length;
+const withMedian2h = restoredDataClean.filter(r => r.json.median_volume_2h > 0).length;
+const with1mPrice = restoredDataClean.filter(r => r.json.latest_1m_price > 0).length;
 
 console.log(`\n📊 Data Quality:`);
-console.log(`  - Records with median_volume_1h: ${withMedian1h}/${restoredData.length}`);  // ✅ NEW
-console.log(`  - Records with median_volume_2h: ${withMedian2h}/${restoredData.length}`);
-console.log(`  - Records with latest_1m_price: ${with1mPrice}/${restoredData.length}`);    // ✅ NEW
+console.log(`  - Records with median_volume_1h: ${withMedian1h}/${restoredDataClean.length}`);  // ✅ NEW
+console.log(`  - Records with median_volume_2h: ${withMedian2h}/${restoredDataClean.length}`);
+console.log(`  - Records with latest_1m_price: ${with1mPrice}/${restoredDataClean.length}`);    // ✅ NEW
 
 console.log('\n✅ Full data restored - ready for scoring branches\n');
 
-return restoredData;
+return restoredDataClean;
