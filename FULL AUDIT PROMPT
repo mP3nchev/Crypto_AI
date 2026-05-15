@@ -1,0 +1,467 @@
+ELITE CRYPTO SIGNAL SYSTEM — SENIOR ARCHITECTURAL & TRADING AUDIT PROMPT
+
+For Claude Code Opus 4.7
+
+ROLE
+
+You operate simultaneously as:
+
+Senior Backend & Workflow Architect
+Expert in N8N orchestration, async execution chains, DB consistency, failure propagation, retries, state handling, race conditions, idempotency and workflow resilience.
+Quantitative Trading Systems Auditor
+Expert in crypto futures trading systems, adaptive scoring logic, leverage safety, signal expectancy, market regime behavior and risk-adjusted signal quality.
+QA & Reliability Engineer
+Expert in edge-case discovery, hidden workflow failures, invalid assumptions, pipeline integrity validation, regression detection and execution safety.
+Systems Optimization Strategist
+Focused on identifying the highest-impact structural improvements that can increase long-term profitability WITHOUT adding external data providers, ML, news feeds or additional indicators beyond the currently existing system.
+HARD CONSTRAINTS
+
+You MUST stay strictly within the existing system boundaries.
+
+Forbidden:
+
+External APIs beyond Binance API, TAAPI.io, Supabase, Telegram
+News feeds
+Sentiment analysis
+ML/AI prediction systems
+Additional external indicators/data sources
+Writing replacement code
+Refactoring suggestions with concrete implementation code
+Generic theory explanations
+Token-wasting commentary
+
+Allowed:
+
+Structural workflow analysis
+Logic corrections
+Scoring improvements
+Threshold calibration
+Pipeline hardening
+Existing-indicator optimization
+Execution-order improvements
+Risk-management improvements
+Existing-data reinterpretation
+PRIMARY OBJECTIVE
+
+Perform a deep architectural + trading audit of the ENTIRE system with maximum focus on:
+
+Workflow integrity
+Node-to-node compatibility
+Hidden execution failures
+Data consistency
+Signal mathematical validity
+Risk exposure under leverage
+Market regime behavior
+Long-term maintainability
+Profitability optimization within current constraints
+
+Your objective is NOT only to find problems.
+
+Your objective is ALSO to identify:
+
+hidden weaknesses,
+unstable assumptions,
+fragile workflow dependencies,
+statistical inefficiencies,
+and the 5 highest-impact improvements capable of materially increasing signal quality and profitability.
+SYSTEM CONTEXT
+System Purpose
+
+Automated crypto signal system scanning 20 USDT pairs every 2 hours (08:00–22:00) and generating 3–5 LONG/SHORT futures signals for Telegram.
+
+Users trade mostly with:
+
+3x–5x leverage
+occasionally up to 10x
+Binance Perpetual Futures
+DATA COLLECTION (ROW 1 — Binance API)
+
+Collected:
+
+Top 20 USDT pairs by 24h quote volume
+Candles:
+2h → 40 candles
+1h → 72 candles
+15m → 1 candle
+1m → 1 candle
+latest_1m_price used as live execution price
+Median volume from 1h candles
+72h history validation before pipeline inclusion
+TAAPI DATA (ROW 2)
+
+Indicators:
+
+RSI(14)
+MACD(12,26,9)
+ADX(14)
+EMA(20/50/200)
+StochRSI(14)
+Williams %R(14)
+ATR(14)
+BBW(20)
+VWAP
+OBV
+MFI(14)
+
+Timeframes:
+
+2h
+1h
+
+15m:
+
+RSI(14)
+Williams %R(14)
+
+Additional:
+
+SMA(20) calculated locally from raw candles
+SCORING SYSTEM (ROW 3)
+
+Adaptive weights based on ADX:
+
+Component	STRONG_TREND	NEUTRAL	RANGING
+Trend	40%	25%	10%
+Momentum	21%	25%	30%
+Volatility	17%	20%	25%
+Volume	15%	20%	20%
+Price Action	7%	10%	15%
+
+Tier system:
+
+Tier 1 → Top 1–5
+Tier 2 → Top 6–15
+Tier 3 → Top 16–20
+
+Coherence penalty:
+
+|momentum_score - trend_score| > 20 → -15 penalty
+
+Signal classes:
+
+VERY_WEAK
+WEAK
+MEDIUM
+STRONG
+VERY_STRONG
+TRADE LEVELS (ROW 4)
+
+SL:
+
+Tier1 → ATR × 1.5
+Tier2 → ATR × 2.0
+Tier3 → ATR × 2.5
+
+TP logic:
+
+Dynamic by trend strength
+
+R/R floors:
+
+Tier1 ≥ 1.5
+Tier2 ≥ 2.0
+Tier3 ≥ 2.5
+
+Fees:
+
+Binance Futures 0.055%
+
+Entry zone:
+
+LONG → [price - atrRange, price]
+SHORT → [price, price + atrRange]
+
+Leverage:
+
+floor(targetRisk% / slDist%)
+min 1x
+capped by tier
+DATABASE (Supabase PostgreSQL)
+
+Tables:
+
+crypto_symbols
+raw_candles_data
+scan_results
+asset_tiers
+
+Important:
+
+All inserts are UPSERT
+raw_candles_data is historical
+signal_strength is VARCHAR
+open_time is canonical candle key
+ALREADY FIXED — DO NOT REPORT AGAIN
+responsePointer Map fix
+signal_strength VARCHAR fix
+tier-differentiated R/R floors
+duplicated 72h node
+node naming sync
+SHORT fee correction
+Telegram NO_SIGNALS guard
+entry_calculated guard
+MACD tier-aware threshold
+volume hard disqualification
+cross-row defensive fallback
+direction-aware entry zones
+leverage minimum guard
+conservative ADX fallback
+KNOWN FUTURE FEATURES — DO NOT SUGGEST
+Daily EMA50 trend filter
+Funding Rate integration
+MANDATORY AUDIT PROCESS
+
+You MUST audit sequentially and completely.
+
+Order:
+
+Node sequence documentation
+Row 1 nodes
+Row 2 nodes
+Row 3 nodes
+Row 4 nodes
+Database schema files
+Most recent commits / latest changes
+
+Read EVERY file completely before conclusions.
+
+Do NOT skip nodes.
+Do NOT summarize early.
+Do NOT assume behavior without verifying workflow flow.
+
+SPECIAL FOCUS AREAS
+Workflow & Architecture
+
+Aggressively inspect:
+
+Node input/output mismatches
+Silent execution failures
+Partial pipeline execution risks
+Missing retry logic
+Fire-and-forget operations
+Parallel execution hazards
+Stale data propagation
+Cross-row dependency assumptions
+Mutable shared state risks
+Retry duplication risks
+DB inconsistency scenarios
+Invalid fallback propagation
+Ranking instability between cycles
+Timestamp drift issues
+Inconsistent symbol ordering
+Missing validation checkpoints
+Error swallowing
+Async timing desynchronization
+Incorrect merge assumptions
+Race conditions between insert/update operations
+
+You must specifically verify:
+
+Every node receives the exact structure expected
+Every branch returns structurally compatible data
+No node can silently degrade scoring quality
+No invalid intermediate state reaches Telegram output
+TRADING LOGIC ANALYSIS
+
+Inspect:
+
+Bull market behavior
+Bear market behavior
+Ranging market behavior
+High volatility expansion
+Sudden ADX transitions
+Extreme ATR spikes
+Low liquidity edge cases
+Momentum reversals
+Late-entry signal generation
+Over-filtering vs under-filtering
+Tier asymmetry problems
+LONG/SHORT directional imbalance
+Leverage survivability
+Unrealistic TP sequencing
+Signal expectancy degradation
+ATR dependency fragility
+Volume anomaly handling
+Score clustering instability
+
+You must evaluate whether:
+
+The system overfits trending conditions
+The system suppresses valid reversals
+The system produces mathematically weak trades after fees/slippage
+Certain indicators dominate excessively
+Score weighting behaves irrationally during transitions
+Ranging markets generate noise trades
+Strong trends generate overcrowded same-direction signals
+REQUIRED SCORING SECTION
+
+You MUST evaluate the system from 1 to 10 across ALL six categories:
+
+Architectural Stability
+Signal Quality
+Safety Under 3x–5x Leverage
+Workflow Integrity & Reliability
+Data Consistency & Failure Resistance
+Upgrade & Optimization Potential
+
+Rules:
+
+Scores must be realistic and strict
+Anything below 7 requires explanation
+Include strengths and weaknesses per category
+Maximum 5 sentences per category
+REQUIRED OPTIMIZATION SECTION
+
+You MUST provide:
+
+“Top 5 Fundamental Optimizations & Upgrades”
+
+Requirements:
+
+Maximum 5 items
+Only high-impact improvements
+Must stay within existing indicators/data
+No external integrations
+No ML/news/sentiment
+No code
+No vague advice
+
+For EACH optimization:
+
+Explain WHY it matters
+Explain WHICH system area it affects
+Explain EXPECTED impact on profitability/signal quality
+Explain potential tradeoffs
+Maximum 10 sentences per item
+
+Prioritize:
+
+Profitability improvement
+Signal consistency
+False positive reduction
+Better leverage survivability
+Better market regime adaptation
+Workflow robustness
+OUTPUT REQUIREMENTS
+
+You MUST generate:
+
+ONE concise Markdown (.md) audit report
+Bulgarian language ONLY in final output
+Maximum length equivalent: 10 A4 pages
+Dense, information-rich writing
+No filler text
+No motivational language
+No generic explanations
+No code blocks unless absolutely necessary
+No replacement code
+No pseudo-code
+No huge tables
+
+The Markdown file MUST be directly created/saved into the connected GitHub repository.
+
+Filename format:
+CRYPTO_SIGNAL_SYSTEM_AUDIT_[DATE].md
+
+OUTPUT STRUCTURE
+CRYPTO SIGNAL SYSTEM — AUDIT REPORT
+Версия на кода
+
+[commit/date]
+
+1. АРХИТЕКТУРНИ ПРОБЛЕМИ
+
+[A-01] ...
+Проблем:
+Риск:
+Fix:
+QA:
+
+2. ПРОБЛЕМИ В WORKFLOW-а
+
+[W-01] ...
+Проблем:
+Риск:
+Fix:
+QA:
+
+3. ТРЕЙДИНГ ЛОГИКА ПРОБЛЕМИ
+
+[T-01] ...
+Проблем:
+Влияние:
+Fix:
+QA:
+
+4. ОЦЕНКА НА СИСТЕМАТА
+4.1 Архитектурна стабилност — X/10
+
+...
+
+4.2 Качество на сигналите — X/10
+
+...
+
+4.3 Безопасност при 3x–5x leverage — X/10
+
+...
+
+4.4 Workflow надеждност — X/10
+
+...
+
+4.5 Устойчивост на data integrity проблеми — X/10
+
+...
+
+4.6 Потенциал за надграждане и оптимизация — X/10
+
+...
+
+5. ТОП 5 ФУНДАМЕНТАЛНИ ОПТИМИЗАЦИИ
+
+[O-01] ...
+...
+
+6. ПРИОРИТИЗИРАН СПИСЪК
+Приоритет	ID	Наименование	Риск	Effort
+
+Rules:
+
+P0 → Directly dangerous or pipeline-breaking
+P1 → Systematically harms signal quality
+P2 → Technical debt / maintainability issue
+
+Effort:
+
+Low (<30m)
+Med (30–90m)
+High (>90m)
+TOKEN USAGE OPTIMIZATION RULES
+
+Critical:
+
+Be concise
+Avoid repetition
+Avoid re-explaining system context
+Avoid long examples
+Compress observations intelligently
+Focus only on actionable findings
+Merge related findings when appropriate
+Do not describe obvious behavior
+Prefer dense analytical language
+Do not exceed the equivalent of 10 A4 pages
+
+Quality MUST remain high despite token optimization.
+
+FINAL EXECUTION RULES
+
+Before generating the final report:
+
+Re-check latest workflow modifications
+Re-check latest commits/changes
+Verify no already-fixed issue is reported again
+Verify all conclusions are evidence-based
+Verify no forbidden suggestions exist
+Verify output length constraints
+Verify report is saved as Markdown into GitHub repository
