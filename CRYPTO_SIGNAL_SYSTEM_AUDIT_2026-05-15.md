@@ -234,17 +234,17 @@ GROUP CANDLE RESPONSES правилно валидира interval gaps и обе
 | P1 | T-05 | Volume score overflow > 100 | Med | Low | ДА |
 | P1 | W-08 | Tier3 dynamic threshold убива диверсификация | Med | Low | ДА |
 | P1 | T-09 | LONG/SHORT imbalance в bull регим | Med | Med | — |
-| P2 | T-06 | OBV non-normalized | Med | Low | — |
+| P2 | T-06 | OBV non-normalized | Med | Low | ДА |
 | P2 | T-03 | Coherence bonus prag твърде нисък | Low | Low | — |
-| P2 | T-07 | R/R bonus не влиза в ranking score | Low | Low | — |
+| P2 | T-07 | R/R bonus не влиза в ranking score | Low | Low | ДА |
 | P2 | A-04 | Cooldown зависи от ръчна N8N конфигурация | Med | Low | — |
-| P2 | W-04 | Coherence penalty при липсващи компоненти | Low | Low | — |
+| P2 | W-04 | Coherence penalty при липсващи компоненти | Low | Low | ДА |
 | P2 | A-05 | Дублиран 1m/median extract | Low | Low | — |
-| P2 | A-06 | DEBUG node single-item array packaging | Low | Low | — |
+| P2 | A-06 | DEBUG node single-item array packaging | Low | Low | ДА |
 | P2 | A-03 | Volatility_score routing fragility | Low | Low | — |
 | P2 | W-03 | Volume soft-disqualification dead code | Low | Low | ДА* |
 | P2 | W-07 | entry_zone undefined в SIGNAL RANKING лог | Low | Low | — |
-| P2 | W-06 | Signal direction MACD-only voting | Med | Med | — |
+| P2 | W-06 | Signal direction MACD-only voting | Med | Med | ДА |
 
 *W-03 е автоматично решен от W-02 fix-а: soft-disqualification path-ът беше премахнат заедно с double penalty логиката.
 
@@ -252,6 +252,8 @@ GROUP CANDLE RESPONSES правилно валидира interval gaps и обе
 
 **Итерация 1 (commit `9b452ab`):** W-01 (HARD FILTERS ENFORCER), A-01 (Restore Full Data After Tier Insert), T-08 (TP-SL CALCULATOR), W-05 (TECHNICAL LEVEL IDENTIFIER), A-02 (SCORE AGGREGATOR).
 
-**Итерация 2 (commit current):** T-01 (MOMENTUM SCORE CALCULATOR — regime-aware), T-02 (TREND SCORE CALCULATOR — Tier1 MACD), T-04 (Volatility Score Calculator1 — BBW rebalance), T-05 + W-02 (VOLUME SCORE CALCULATOR + VOLUME PENALTY APPLICATOR — re-scale + ratio multiplier + passthrough), W-08 (SIGNAL RANKING & TOP 5 SELECTION — diversification threshold).
+**Итерация 2 (commit `5681263`):** T-01 (MOMENTUM SCORE CALCULATOR — regime-aware), T-02 (TREND SCORE CALCULATOR — Tier1 MACD), T-04 (Volatility Score Calculator1 — BBW rebalance), T-05 + W-02 (VOLUME SCORE CALCULATOR + VOLUME PENALTY APPLICATOR — re-scale + ratio multiplier + passthrough), W-08 (SIGNAL RANKING & TOP 5 SELECTION — diversification threshold).
+
+**Итерация 3 (commit current):** T-06 (VOLUME SCORE CALCULATOR + SCORE AGGREGATOR — OBV normalised към candle_volume), T-07 (RISK-REWARD SCORE OUTPUT — rr_bonus injection в total_score + signal_strength reclass), W-04 (SCORE AGGREGATOR — coherence penalty gated за scores > 0), W-06 (SCORE AGGREGATOR — RSI directional vote penalty), A-06 (DEBUG + DE-DUPLICATION — fan-out на flat items за row-oriented Supabase schema).
 
 **Финална препоръка:** Започни от P0 (един следобед работа), след това P1 пакета T-01/T-02/T-04/T-05/T-10 (калибровки в scoring tables, едновременно). Backtest 30-дневна замразена history между всеки етап. Не пускай нови оптимизации преди да валидираш предишните в реални 5–7 cycles.

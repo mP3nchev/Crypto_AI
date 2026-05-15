@@ -142,34 +142,85 @@ function calculateRRScore(data) {
 // =====================================================
 // PROCESS EACH SYMBOL
 // =====================================================
+// =====================================================
+// [T-07] SIGNAL STRENGTH RECLASSIFICATION (after rr_bonus injection)
+// Mirrors the thresholds used by SCORE AGGREGATOR so downstream Telegram and
+// Hard Filters see the same classification scheme regardless of source.
+// =====================================================
+function classifyByScore(score) {
+  if (score >= 85) return { signal_strength: 'VERY_STRONG', confidence_level: 'VERY_HIGH' };
+  if (score >= 75) return { signal_strength: 'STRONG',      confidence_level: 'HIGH' };
+  if (score >= 65) return { signal_strength: 'MEDIUM',      confidence_level: 'MEDIUM' };
+  if (score >= 50) return { signal_strength: 'WEAK',        confidence_level: 'LOW' };
+  return            { signal_strength: 'VERY_WEAK',         confidence_level: 'VERY_LOW' };
+}
+
 const results = inputData.map((item, index) => {
   const data = item.json;
-  
+
   console.log(`\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━`);
   console.log(`📋 Symbol ${index + 1}/${inputData.length}: ${data.symbol}`);
   console.log(`━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━`);
-  
+
   // Calculate R/R score
   const rrScoreResult = calculateRRScore(data);
-  
+
+  // =====================================================
+  // [T-07] Inject rr_bonus into total_score so the bonus actually drives ranking.
+  //
+  // Previously rr_bonus was added only to the side metric risk_reward_score, which
+  // is informational and never feeds Hard Filters Enforcer or SIGNAL RANKING. As
+  // a result, a marginal-score signal with exceptional R/R (e.g. total_score 63
+  // + rr_bonus +10) failed the Tier-2 dynamic floor of 65-68 despite being one
+  // of the highest-R/R candidates in the cycle — an obvious mis-prioritisation
+  // of sustainability quality.
+  //
+  // Fix: total_score = min(100, total_score_pre_rr_bonus + rr_bonus). Reclassify
+  // signal_strength so downstream classification reflects the bonused score.
+  // Hard Filters dynamic floor, SIGNAL RANKING sort, and Telegram strength
+  // labels all observe the same value.
+  //
+  // Note on ordering: VOLUME PENALTY APPLICATOR (now a passthrough post W-02) ran
+  // before TP-SL Calculator → R/R Filter → R/R Score Output. Bonus is applied
+  // HERE, downstream of all volume/penalty math, so there is no interaction
+  // with the volume_score weighting.
+  // =====================================================
+  const rrBonus = parseFloat(data.rr_bonus || 0);
+  const totalScorePreBonus = parseFloat(data.total_score || 0);
+  const totalScoreWithBonus = Math.min(100, totalScorePreBonus + rrBonus);
+  const reclass = classifyByScore(totalScoreWithBonus);
+
+  if (rrBonus > 0) {
+    console.log(`  [T-07] total_score injection: ${totalScorePreBonus.toFixed(2)} + ${rrBonus} = ${totalScoreWithBonus.toFixed(2)} | strength: ${data.signal_strength} → ${reclass.signal_strength}`);
+  }
+
   return {
     json: {
       // ═══════════════════════════════════════════════
       // PASS-THROUGH ALL EXISTING DATA
       // ═══════════════════════════════════════════════
       ...data,
-      
+
       // ═══════════════════════════════════════════════
       // RISK/REWARD SCORE (SUSTAINABILITY METRIC)
       // ═══════════════════════════════════════════════
       risk_reward_score: rrScoreResult.risk_reward_score,
-      
+
+      // ═══════════════════════════════════════════════
+      // [T-07] BONUSED TOTAL SCORE + RECLASSIFIED STRENGTH
+      // ═══════════════════════════════════════════════
+      total_score: parseFloat(totalScoreWithBonus.toFixed(2)),
+      total_score_pre_rr_bonus: parseFloat(totalScorePreBonus.toFixed(2)),
+      signal_strength: reclass.signal_strength,
+      confidence_level: reclass.confidence_level,
+      rr_bonus_applied_to_total: rrBonus,
+
       // ═══════════════════════════════════════════════
       // SCORE BREAKDOWN (FOR AUDIT)
       // ═══════════════════════════════════════════════
       rr_score_components: rrScoreResult.score_components,
       rr_scoring_weights: rrScoreResult.scoring_weights,
-      
+
       // ═══════════════════════════════════════════════
       // TIMESTAMPS
       // ═══════════════════════════════════════════════

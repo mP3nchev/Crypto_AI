@@ -107,27 +107,49 @@ function calculateVolumeScore(data) {
   }
   
   // =====================================================
-  // COMPONENT 2: OBV ANALYSIS (30 points max)
+  // COMPONENT 2: OBV ANALYSIS (30 points max) — [T-06] NORMALIZED
+  //
+  // OBV is a cumulative volume metric whose absolute magnitude scales with
+  // the asset's lifetime traded volume (BTC OBV regularly in billions vs.
+  // small altcoin OBV in tens of thousands). Absolute thresholds (1M / -1M)
+  // produced near-binary classifications:
+  //   - BTC/ETH: OBV almost always ≫ 1M → permanent +30 (max points)
+  //   - Small altcoins: OBV almost never reaches 1M → permanent +5/+15
+  // OBV lost its analytical value as a buying/selling-pressure proxy and
+  // became a covert volume-tier proxy.
+  //
+  // Normalisation: obv_ratio = obv_1h / candle_volume.  This rescales OBV
+  // to "cumulative pressure per unit recent 1h volume", which is comparable
+  // across assets. Thresholds 0.5 / 0.1 / -0.1 / -0.5 give a meaningful
+  // five-bucket split for both BTC and small caps.
   // =====================================================
-  
+
   const obv_1h = parseFloat(data.obv_1h);
-  
+
   if (!isNaN(obv_1h)) {
     maxScore += 30;
-    console.log(`  OBV (1h): ${obv_1h.toFixed(2)}`);
-    
-    if (obv_1h > 1000000) {
+
+    const obvRatio = (!isNaN(candle_volume) && candle_volume > 0)
+      ? obv_1h / candle_volume
+      : 0;
+
+    console.log(`  OBV (1h): ${obv_1h.toFixed(2)} | candle_volume: ${candle_volume} | ratio: ${obvRatio.toFixed(3)}`);
+
+    if (obvRatio > 0.5) {
       totalScore += 30;
-      console.log(`  Strong buying pressure: +30 points`);
-    } else if (obv_1h > 0) {
+      console.log(`  Strong buying pressure (ratio > 0.5): +30 points`);
+    } else if (obvRatio > 0.1) {
       totalScore += 25;
-      console.log(`  Positive OBV: +25 points`);
-    } else if (obv_1h > -1000000) {
+      console.log(`  Positive OBV pressure (ratio > 0.1): +25 points`);
+    } else if (obvRatio > -0.1) {
       totalScore += 15;
-      console.log(`  Mild selling pressure: +15 points`);
+      console.log(`  Neutral OBV pressure (|ratio| <= 0.1): +15 points`);
+    } else if (obvRatio > -0.5) {
+      totalScore += 10;
+      console.log(`  Mild selling pressure (ratio > -0.5): +10 points`);
     } else {
       totalScore += 5;
-      console.log(`  Strong selling pressure: +5 points`);
+      console.log(`  Strong selling pressure (ratio <= -0.5): +5 points`);
     }
   } else {
     console.log(`  OBV data unavailable`);
