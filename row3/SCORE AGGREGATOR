@@ -42,23 +42,28 @@ function getMomentumCorrectionMultiplier(score, direction) {
 }
 
 // =====================================================
-// [T-03] VOLUME (OBV) DIRECTION CORRECTION MULTIPLIER
+// [T-03 + T-06] VOLUME (OBV) DIRECTION CORRECTION MULTIPLIER — NORMALIZED
 // OBV is direction-aware: rising OBV confirms bullish, not bearish.
-// When direction=SHORT but OBV is strongly positive, reduce the volume contribution.
-// Ceiling 0.75 -- avoids over-penalizing the direction-neutral 70/100 volume points.
+// When direction=SHORT but OBV pressure is strongly positive, reduce the volume
+// contribution. Ceiling 0.75 — avoids over-penalising the direction-neutral
+// portion of volume points.
+//
+// [T-06] obvRatio = obv_1h / candle_volume — cross-asset comparable.
+// Thresholds (0.5 / 0.1) mirror the VOLUME SCORE CALCULATOR scoring buckets to
+// keep the entire OBV-derived logic consistent across the pipeline.
 // =====================================================
-function getVolumeCorrectionMultiplier(score, direction, obv) {
+function getVolumeCorrectionMultiplier(score, direction, obvRatio) {
   if (direction === 'SHORT') {
-    if (obv > 1000000)  return 0.75;
-    if (obv > 500000)   return 0.85;
+    if (obvRatio > 0.5)  return 0.75;
+    if (obvRatio > 0.1)  return 0.85;
     return 1.0;
   }
   if (direction === 'LONG') {
-    if (obv < -1000000) return 0.75;
-    if (obv < -500000)  return 0.85;
+    if (obvRatio < -0.5) return 0.75;
+    if (obvRatio < -0.1) return 0.85;
     return 1.0;
   }
-  return 1.0; // NEUTRAL -- no correction
+  return 1.0; // NEUTRAL — no correction
 }
 
 // =====================================================
@@ -170,11 +175,14 @@ const results = inputData.map((item, index) => {
   // =====================================================
   const signalDir = data.trend_direction || 'NEUTRAL';
   const obv1h     = parseFloat(data.obv_1h || 0);
+  const candleVol = parseFloat(data.candle_volume || 0);
+  // [T-06] Normalised OBV ratio — comparable across BTC and small altcoins
+  const obvRatio  = candleVol > 0 ? obv1h / candleVol : 0;
 
   // [T-02] Momentum correction: penalize bullish momentum on SHORT signals (and vice versa)
   const momentumCorrMult = getMomentumCorrectionMultiplier(momentumScore, signalDir);
-  // [T-03] Volume correction: penalize rising OBV on SHORT signals (and vice versa)
-  const volumeCorrMult   = getVolumeCorrectionMultiplier(volumeScore, signalDir, obv1h);
+  // [T-03 + T-06] Volume correction using normalised OBV ratio
+  const volumeCorrMult   = getVolumeCorrectionMultiplier(volumeScore, signalDir, obvRatio);
 
   const weightedMomentum    = momentumScore    * weights.momentum    * momentumCorrMult;
   const weightedTrend       = trendScore       * weights.trend;
@@ -194,12 +202,20 @@ const results = inputData.map((item, index) => {
 
   // =====================================================
   // STEP 5.5: MOMENTUM-TREND COHERENCE CHECK
+  //
+  // [W-04] Coherence penalty now gated on BOTH scores > 0. Previously a
+  // legitimate trend_score = 0 (e.g. all MACD + EMA fields absent on a thinly-
+  // covered symbol, branch ran but produced zero) combined with a normal
+  // momentum_score = 50 triggered |diff| = 50 > 20 → automatic −15 penalty
+  // without a real momentum/trend conflict. The A-02 fail-fast already
+  // excludes null/NaN cases; this gate covers the residual "branch ran but
+  // every indicator was missing" path that yields a legitimate numeric zero.
   // =====================================================
   const scoreDifference = Math.abs(momentumScore - trendScore);
   let coherencePenalty = 0;
   let coherenceBonus = 0;
 
-  if (scoreDifference > 20) {
+  if (momentumScore > 0 && trendScore > 0 && scoreDifference > 20) {
     coherencePenalty = -15;
     console.log(`  CONFLICT: Scores differ by >20 pts -> -15 penalty`);
   }
@@ -208,7 +224,37 @@ const results = inputData.map((item, index) => {
     console.log(`  STRONG COHERENCE: Both high & aligned -> +5 bonus`);
   }
 
-  totalScore = Math.max(0, Math.min(100, totalScore + coherencePenalty + coherenceBonus));
+  // =====================================================
+  // [W-06] DIRECTION CONFIRMATION VOTE — RSI as secondary directional signal
+  //
+  // trend_direction (= signal_direction) is derived purely from MACD-2h
+  // histogram + EMA20/50 alignment in TREND SCORE CALCULATOR. RSI/StochRSI
+  // never contribute to the directional decision, only to the momentum
+  // multiplier (T-02) which attenuates the WEIGHTED momentum contribution.
+  // A late-stage LONG entry with RSI_2h = 75 (overbought) survives because
+  // MACD is still positive; T-02 reduces momentum's weight but the overall
+  // signal still passes.
+  //
+  // This layer adds a flat −5 to total_score when RSI_2h disagrees strongly
+  // with the MACD-derived direction (RSI > 60 vs SHORT, or RSI < 40 vs LONG).
+  // Gentle on purpose — T-02 already attenuates the momentum component, so
+  // stacking another large penalty would double-count. The 60/40 thresholds
+  // are tighter than the T-02 bands (which trigger at 50) to fire only on
+  // unambiguous directional disagreement.
+  // =====================================================
+  const rsi2hForVote = parseFloat(data.rsi_2h);
+  let directionConflictPenalty = 0;
+  if (!isNaN(rsi2hForVote) && (signalDir === 'LONG' || signalDir === 'SHORT')) {
+    if (signalDir === 'LONG' && rsi2hForVote < 40) {
+      directionConflictPenalty = -5;
+      console.log(`  [W-06] DIRECTION_VOTE_CONFLICT: LONG vs RSI_2h ${rsi2hForVote.toFixed(1)} (bearish bias) -> -5`);
+    } else if (signalDir === 'SHORT' && rsi2hForVote > 60) {
+      directionConflictPenalty = -5;
+      console.log(`  [W-06] DIRECTION_VOTE_CONFLICT: SHORT vs RSI_2h ${rsi2hForVote.toFixed(1)} (bullish bias) -> -5`);
+    }
+  }
+
+  totalScore = Math.max(0, Math.min(100, totalScore + coherencePenalty + coherenceBonus + directionConflictPenalty));
   console.log(`  FINAL TOTAL SCORE: ${totalScore.toFixed(2)}/100`);
 
   // =====================================================
@@ -237,10 +283,15 @@ const results = inputData.map((item, index) => {
       volume:       parseFloat(weightedVolume.toFixed(2)),
       price_action: parseFloat(weightedPriceAction.toFixed(2))
     },
-    // Direction correction multipliers (T-02 + T-03 audit trail)
+    // Direction correction multipliers (T-02 + T-03 + T-06 audit trail)
     momentum_correction_multiplier: momentumCorrMult,
     volume_correction_multiplier:   volumeCorrMult,
     obv_1h_at_correction:           obv1h,
+    obv_ratio_at_correction:        parseFloat(obvRatio.toFixed(4)),
+    // [W-04 + W-06] coherence/direction-vote audit trail
+    coherence_penalty:              coherencePenalty,
+    coherence_bonus:                coherenceBonus,
+    direction_conflict_penalty:     directionConflictPenalty,
     total_quality_score: parseFloat(totalScore.toFixed(2))
   };
 

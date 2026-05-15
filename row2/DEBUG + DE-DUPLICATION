@@ -80,11 +80,28 @@ if (validCandles.length === 0) {
   return [];
 }
 
-const candlesArray = validCandles.map(item => item.json);
-
-return [{
-  json: {
-    candles_array: candlesArray,
-    total_count: candlesArray.length
-  }
-}];
+// =====================================================
+// [A-06] FAN-OUT: emit one item per candle instead of a single
+// item containing { candles_array: [...] }.
+//
+// raw_candles_data is row-oriented: open_time is the canonical key, one row
+// per (symbol|interval|open_time). The previous single-item-with-array
+// packaging forced the downstream HTTP Request Post to either (a) loop over
+// $json.candles_array via an expression (fragile, easy to break on rename)
+// or (b) write the entire array as a JSONB blob into a single row, which
+// breaks scan_cycle_id partitioning and the open_time UPSERT key.
+//
+// Required N8N canvas configuration (matching this fan-out):
+//   HTTP Request Post (Supabase) → Body should reference `{{$json}}` so each
+//   candle item is posted as its own row. Do NOT use `{{$json.candles_array}}`
+//   or any expression assuming a single wrapping item.
+//
+// Downstream invariants preserved:
+//   - Candles Grouping & Latest 20 per Symbol receives data from the HTTP GET
+//     (Supabase), not directly from this node — its $input.all() iteration
+//     over flat candle rows continues to work.
+//   - Each emitted item carries the full canonical candle shape (symbol,
+//     interval, open_time, OHLCV, median volumes, latest_1m_price), matching
+//     the schema downstream nodes already expect.
+// =====================================================
+return validCandles;
