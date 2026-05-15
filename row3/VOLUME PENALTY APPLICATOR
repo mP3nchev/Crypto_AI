@@ -1,14 +1,21 @@
 // =====================================================
-// NODE 3: VOLUME PENALTY APPLICATOR v2.0
+// NODE 3: VOLUME PENALTY APPLICATOR v3.0 — PASSTHROUGH (W-02)
 // =====================================================
-// Получава от Score Aggregator:
-// - total_score (pure quality score)
-// - volume_penalty (изчислен от Volume Ratio Calculator преди агрегацията)
+// [W-02] Volume double-penalty resolved at source: VOLUME SCORE CALCULATOR now
+// integrates the ratio multiplier directly into volume_score, which is then
+// weighted (15-20%) by SCORE AGGREGATOR. The previous subtract of volume_penalty
+// from total_score here caused the same low-ratio observation to suppress the
+// signal twice.
 //
-// Функция:
-// - Изважда volume_penalty от total_score
-// - Пререкласифицира signal_strength след penalty
-// - БЕЗ hard disqualifications (те са в Hard Filters Enforcer)
+// This node is RETAINED in the workflow (removal would require editing the N8N
+// canvas) but converted to a metadata-only passthrough:
+//   - No subtract from total_score
+//   - No reclassification of signal_strength (already correct from Aggregator)
+//   - Audit trail preserved (volume_penalty value, volume_status, ratio_multiplier)
+//
+// volume_penalty arriving here is 0 (set by Volume Score Calculator post-fix).
+// If a legacy upstream still emits a non-zero penalty, it is logged but not
+// applied — fail-loud rather than re-introduce the double-count.
 // =====================================================
 
 console.log('⚖️ ═══════════════════════════════════════════════');
@@ -24,74 +31,32 @@ if (inputData.length === 0) {
 }
 
 // =====================================================
-// PENALTY APPLICATION LOGIC
+// PASSTHROUGH LOGIC (W-02)
 // =====================================================
 function applyVolumePenalty(data) {
   const originalScore = parseFloat(data.total_score || 0);
   const penalty = parseFloat(data.volume_penalty || 0);
-  
-  console.log(`  Original Quality Score: ${originalScore.toFixed(2)}/100`);
-  console.log(`  Volume Penalty: ${penalty.toFixed(1)} points`);
-  
-  // Apply penalty (penalty is negative, so we ADD it which subtracts)
-  const adjustedScore = Math.max(0, Math.min(100, originalScore + penalty));
-  
-  console.log(`  Adjusted Score: ${adjustedScore.toFixed(2)}/100`);
-  
-  // Determine if penalty caused significant impact
-  const penaltyImpact = originalScore - adjustedScore;
-  let impactLevel = 'NONE';
-  
-  if (penaltyImpact === 0) {
-    impactLevel = 'NONE';
-  } else if (penaltyImpact <= 5) {
-    impactLevel = 'LOW';
-  } else if (penaltyImpact <= 10) {
-    impactLevel = 'MEDIUM';
-  } else {
-    impactLevel = 'HIGH';
+  const ratioMult = parseFloat(data.volume_ratio_multiplier ?? 1);
+
+  console.log(`  Quality Score: ${originalScore.toFixed(2)}/100 (passthrough)`);
+  console.log(`  Volume Penalty (legacy field): ${penalty.toFixed(1)} — NOT APPLIED [W-02]`);
+  console.log(`  Volume Ratio Multiplier (already in volume_score): ×${ratioMult.toFixed(2)}`);
+
+  if (penalty !== 0) {
+    console.warn(`  ⚠️ [W-02] Non-zero volume_penalty (${penalty}) received from upstream — discarded. ` +
+                 `Upstream node may be running a stale version. Investigate VOLUME SCORE CALCULATOR.`);
   }
-  
-  // Re-classify signal strength after penalty
-  let signalStrength = 'VERY_WEAK';
-  let confidenceLevel = 'VERY_LOW';
-  
-  if (adjustedScore >= 85) {
-    signalStrength = 'VERY_STRONG';
-    confidenceLevel = 'VERY_HIGH';
-  } else if (adjustedScore >= 75) {
-    signalStrength = 'STRONG';
-    confidenceLevel = 'HIGH';
-  } else if (adjustedScore >= 65) {
-    signalStrength = 'MEDIUM';
-    confidenceLevel = 'MEDIUM';
-  } else if (adjustedScore >= 50) {
-    signalStrength = 'WEAK';
-    confidenceLevel = 'LOW';
-  } else {
-    signalStrength = 'VERY_WEAK';
-    confidenceLevel = 'VERY_LOW';
-  }
-  
-  // Check if penalty caused reclassification
-  const originalStrength = data.signal_strength;
-  const wasDowngraded = originalStrength !== signalStrength;
-  
-  if (wasDowngraded) {
-    console.log(`  ⚠️ Signal DOWNGRADED: ${originalStrength} → ${signalStrength}`);
-  } else {
-    console.log(`  ✅ Signal UNCHANGED: ${signalStrength}`);
-  }
-  
+
+  // Score unchanged; signal_strength was already correctly assigned by SCORE AGGREGATOR.
   return {
-    adjusted_score: parseFloat(adjustedScore.toFixed(2)),
-    signal_strength: signalStrength,
-    confidence_level: confidenceLevel,
-    penalty_applied: penalty !== 0,
-    penalty_impact: impactLevel,
-    was_downgraded: wasDowngraded,
-    original_strength: originalStrength,
-    score_change: parseFloat(penaltyImpact.toFixed(2))
+    adjusted_score: parseFloat(originalScore.toFixed(2)),
+    signal_strength: data.signal_strength,
+    confidence_level: data.confidence_level,
+    penalty_applied: false,
+    penalty_impact: 'NONE',
+    was_downgraded: false,
+    original_strength: data.signal_strength,
+    score_change: 0
   };
 }
 

@@ -21,108 +21,86 @@ function calculateVolumeScore(data) {
   
   // =====================================================
   // COMPONENT 1: VOLUME TIER + RATIO (50 points max)
+  // [T-05] Points re-scaled to fit the 50-point cap. Previously the EXCELLENT
+  //        bucket awarded 70 points against maxScore=50, producing volume_score
+  //        > 100 after normalization and a weighted contribution that exceeded
+  //        the planned 15-20% budget for high-volume assets (favouring BTC/ETH).
   // =====================================================
-  
+
   const cs_volume = parseFloat(data.cs_volume);
   const candle_volume = parseFloat(data.candle_volume);
-  
+
   if (!isNaN(cs_volume) && cs_volume > 0) {
     maxScore += 50;
-    
+
     let volumePoints = 0;
     let volumeStatus = '';
-    
+
     if (cs_volume >= 1000000000) {
-      volumePoints = 70;
+      volumePoints = 50;
       volumeStatus = 'EXCELLENT';
     } else if (cs_volume >= 500000000) {
-      volumePoints = 60;
+      volumePoints = 42;
       volumeStatus = 'GOOD';
     } else if (cs_volume >= 100000000) {
-      volumePoints = 50;
+      volumePoints = 35;
       volumeStatus = 'MODERATE';
     } else if (cs_volume >= 50000000) {
-      volumePoints = 30;
+      volumePoints = 20;
       volumeStatus = 'LOW';
     } else {
-      volumePoints = 10;
+      volumePoints = 8;
       volumeStatus = 'VERY_LOW';
     }
-    
+
     totalScore += volumePoints;
     console.log(`  24h Volume: $${(cs_volume / 1000000).toFixed(2)}M -> ${volumePoints} points (${volumeStatus})`);
     
     // =====================================================
-    // VOLUME RATIO CALCULATION
+    // VOLUME RATIO CALCULATION — [W-02] integrated multiplier, not separate penalty
+    //
+    // Previously volume was penalized twice: once via weighted volume_score in
+    // Score Aggregator (15-20%) and a second time via volume_penalty subtracted
+    // directly from total_score in VOLUME PENALTY APPLICATOR. Result was an
+    // over-suppression of legitimate setups at ratios 0.5-0.79 and inconsistent
+    // scoring math.
+    //
+    // Fix: encode the ratio quality as a multiplier on the final volume_score
+    // itself. The single weighted contribution (0.15-0.20 × volume_score) now
+    // naturally reflects volume suspicion without a duplicate subtract.
+    // VOLUME PENALTY APPLICATOR is converted to a metadata passthrough.
     // =====================================================
     if (!isNaN(candle_volume) && candle_volume > 0) {
-      
+
       const medianVolume1h = parseFloat(data.median_volume_1h || 0);
-      
-      const baseline_1h = medianVolume1h > 0 
+
+      const baseline_1h = medianVolume1h > 0
         ? medianVolume1h
         : (cs_volume / 24);
-      
+
       volumeRatio = candle_volume / baseline_1h;
-      
-      const baselineMethod = medianVolume1h > 0 
-        ? 'Median 1h (12h history)' 
+
+      const baselineMethod = medianVolume1h > 0
+        ? 'Median 1h (12h history)'
         : 'Simple Avg (24h/24)';
-      
+
       console.log(`  Baseline Method: ${baselineMethod}`);
       console.log(`  Baseline (1h): ${baseline_1h.toFixed(2)}`);
       console.log(`  Volume Ratio: ${volumeRatio.toFixed(3)} (current 1h / typical 1h)`);
-      
-      // =====================================================
-      // GRADUATED PENALTY THRESHOLDS
-      // =====================================================
-      
-   // Hard Disqualification - Volume Ratio < 0.3 (TRADING_PRINCIPLES §4.1)
+
+      // Hard Disqualification — Volume Ratio < 0.3 (TRADING_PRINCIPLES §4.1)
+      // Kept as a true drop-before-MERGE hard kill; nothing changes here.
       if (volumeRatio < 0.3) {
         return {
           score: 0,
-          penalty: -100,
+          penalty: 0,
+          ratio_multiplier: 0,
           volume_ratio: volumeRatio,
           status: 'HARD_DISQUALIFIED',
           disqualification_reason: 'VOLUME_CRITICALLY_LOW',
           volume_disqualified: true
         };
       }
-      // Soft Penalty Zone - Volume Ratio 0.3-0.49
-      else if (volumeRatio < 0.5) {
-        penalty = -100;
-        volumeStatus = 'DISQUALIFIED';
-        console.log(`  ⚠️ SOFT DISQUALIFIED: Volume ratio ${volumeRatio.toFixed(3)} in 0.3-0.5 range → penalty applied`);
-      }
-        
-      // Range 0.5-0.59: -15 до -10 (scaling)
-      else if (volumeRatio >= 0.5 && volumeRatio < 0.6) {
-        const scaledPenalty = -15 + ((volumeRatio - 0.5) / 0.1) * 5;
-        penalty = Math.round(scaledPenalty * 10) / 10;
-        volumeStatus = 'VERY_LOW';
-        console.log(`  ⚠️ Scaled Penalty: ${penalty.toFixed(1)} points (ratio ${volumeRatio.toFixed(3)} in range 0.5-0.59)`);
-      }
-      // Range 0.6-0.69: -10 до -5 (scaling)
-      else if (volumeRatio >= 0.6 && volumeRatio < 0.7) {
-        const scaledPenalty = -10 + ((volumeRatio - 0.6) / 0.1) * 5;
-        penalty = Math.round(scaledPenalty * 10) / 10;
-        volumeStatus = 'BELOW_NORMAL';
-        console.log(`  ⚠️ Scaled Penalty: ${penalty.toFixed(1)} points (ratio ${volumeRatio.toFixed(3)} in range 0.6-0.69)`);
-      }
-      // Range 0.7-0.79: -5 до 0 (scaling)
-      else if (volumeRatio >= 0.7 && volumeRatio < 0.8) {
-        const scaledPenalty = -5 + ((volumeRatio - 0.7) / 0.1) * 5;
-        penalty = Math.round(scaledPenalty * 10) / 10;
-        volumeStatus = 'SLIGHTLY_LOW';
-        console.log(`  ℹ️ Scaled Penalty: ${penalty.toFixed(1)} points (ratio ${volumeRatio.toFixed(3)} in range 0.7-0.79)`);
-      }
-      // >= 0.8: No penalty
-      else {
-        penalty = 0;
-        volumeStatus = 'NORMAL';
-        console.log(`  ✅ No penalty (ratio ${volumeRatio.toFixed(3)} >= 0.8 = normal/high volume)`);
-      }
-      
     } else {
       console.log(`  ⚠️ Missing 1h candle volume data`);
     }
@@ -189,18 +167,45 @@ function calculateVolumeScore(data) {
   }
   
   // =====================================================
-  // FINAL SCORE
+  // FINAL SCORE — [W-02 + T-05] ratio multiplier applied here
+  //
+  // Maps recent-vs-typical 1h volume into a multiplicative attenuation of the
+  // composite volume_score (tier + OBV + MFI). Replaces the previous separate
+  // volume_penalty subtract in VOLUME PENALTY APPLICATOR.
+  //
+  // Calibration (matches old severity at ratio ~0.55 while staying continuous):
+  //   ratio >= 0.8       → 1.00 (normal/high volume — no attenuation)
+  //   ratio 0.7-0.79     → 0.85
+  //   ratio 0.6-0.69     → 0.65
+  //   ratio 0.5-0.59     → 0.40
+  //   ratio 0.3-0.49     → 0.20 (Hard Filters Enforcer still rejects ratio < 0.5;
+  //                              this branch only fires if filter is loosened)
+  //   ratio < 0.3        → hard disqualified above
   // =====================================================
-  
-  const finalScore = maxScore > 0 ? Math.round((totalScore / maxScore) * 100) : 0;
-  
-  console.log(`  Volume Score: ${finalScore}/100 | Penalty: ${penalty}`);
-  
+  let ratioMultiplier = 1.0;
+  let volumeStatusFromRatio = 'NORMAL';
+
+  if (volumeRatio > 0) {
+    if (volumeRatio >= 0.8)        { ratioMultiplier = 1.00; volumeStatusFromRatio = 'NORMAL'; }
+    else if (volumeRatio >= 0.7)   { ratioMultiplier = 0.85; volumeStatusFromRatio = 'SLIGHTLY_LOW'; }
+    else if (volumeRatio >= 0.6)   { ratioMultiplier = 0.65; volumeStatusFromRatio = 'BELOW_NORMAL'; }
+    else if (volumeRatio >= 0.5)   { ratioMultiplier = 0.40; volumeStatusFromRatio = 'VERY_LOW'; }
+    else                           { ratioMultiplier = 0.20; volumeStatusFromRatio = 'NEAR_DISQUALIFIED'; }
+    console.log(`  Ratio Multiplier: ×${ratioMultiplier.toFixed(2)} (${volumeStatusFromRatio})`);
+  }
+
+  const baseScore = maxScore > 0 ? Math.round((totalScore / maxScore) * 100) : 0;
+  const finalScore = Math.round(baseScore * ratioMultiplier);
+
+  console.log(`  Volume Score: ${baseScore}/100 × ${ratioMultiplier.toFixed(2)} = ${finalScore}/100`);
+
   return {
     score: finalScore,
-    penalty: penalty,
+    base_score: baseScore,
+    ratio_multiplier: ratioMultiplier,
+    penalty: 0,                       // [W-02] retained for backward compatibility; always 0 now
     volume_ratio: volumeRatio,
-    status: penalty === -100 ? 'DISQUALIFIED' : (penalty < 0 ? 'PENALIZED' : 'GOOD')
+    status: volumeStatusFromRatio === 'NORMAL' ? 'GOOD' : volumeStatusFromRatio
   };
 }
 
@@ -222,7 +227,9 @@ const results = inputData
       json: {
         ...data,
         volume_score: volume.score,
-        volume_penalty: volume.penalty,
+        volume_base_score: volume.base_score,
+        volume_ratio_multiplier: volume.ratio_multiplier,
+        volume_penalty: volume.penalty,             // always 0 post W-02 (kept for audit + downstream compatibility)
         volume_ratio: volume.volume_ratio,
         volume_status: volume.status,
         scored_at: new Date().toISOString()

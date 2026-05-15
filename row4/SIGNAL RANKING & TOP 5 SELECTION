@@ -136,6 +136,12 @@ sortedSignals.forEach((signal, index) => {
   }
 
   // ── Tier 3 quality guard (score-blind diversification protection) ──
+  // [W-08] Threshold rebalanced. Previous formula `avg − 15` blocked virtually
+  // all Tier 3 candidates whenever a strong Tier 1 anchor was already selected
+  // (e.g. avg=88 → threshold=73, while Hard Filters Tier 3 floor is 50-65 →
+  // Tier 3 unreachable). New formula widens the allowed delta to 25 points and
+  // clamps against the absolute floor, so diversification stays alive without
+  // letting low-quality Tier 3 signals piggyback on a high-quality portfolio.
   if (tier === 3 && !allAreTier3) {
     let tier3Threshold;
     if (selectedSignals.length === 0) {
@@ -143,8 +149,8 @@ sortedSignals.forEach((signal, index) => {
       console.log(`    📊 Tier 3 threshold: ${tier3Threshold} (absolute floor — no signals selected yet)`);
     } else {
       const avgSelected = selectedSignals.reduce((sum, s) => sum + parseFloat(s.json.total_score || 0), 0) / selectedSignals.length;
-      tier3Threshold = avgSelected - 15;
-      console.log(`    📊 Tier 3 threshold: ${tier3Threshold.toFixed(2)} (avg ${avgSelected.toFixed(2)} − 15)`);
+      tier3Threshold = Math.max(TIER3_ABSOLUTE_FLOOR, avgSelected - 25);
+      console.log(`    📊 Tier 3 threshold: ${tier3Threshold.toFixed(2)} (max(${TIER3_ABSOLUTE_FLOOR}, avg ${avgSelected.toFixed(2)} − 25))`);
     }
 
     if (totalScore < tier3Threshold) {
