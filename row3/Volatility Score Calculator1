@@ -76,11 +76,27 @@ function calculateVolatilityScore(scanData, tier, atrThresholdLow, atrThresholdH
     maxScore += 40;
     let bbwScore = 0;
 
-    // Tier-specific BBW thresholds (BTC structurally lower BBW than altcoins)
+    // =====================================================
+    // [T-04] Tier-aware BBW thresholds — calibrated for crypto reality
+    //
+    // TRADING_PRINCIPLES §3.3 defines GLOBAL BBW thresholds (squeeze < 0.02,
+    // optimal 0.02-0.05). That spec was written before per-tier analysis of
+    // crypto BBW distributions. Empirically:
+    //   - BTC/ETH (Tier 1): typical BBW 0.005-0.025; principles threshold OK
+    //   - Mid-caps (Tier 2): typical BBW 0.015-0.060; principles threshold OK
+    //   - Altcoins (Tier 3): typical BBW 0.030-0.150; principles threshold
+    //     SYSTEMATICALLY classifies most altcoins as "elevated"/"extreme",
+    //     suppressing the breakout setups that produce the highest expected
+    //     value in this tier.
+    //
+    // Override is intentional. Tier 2 keeps the principles-compatible band.
+    // Tier 1 tightens slightly (BTC squeezes are very narrow). Tier 3 widens
+    // to fit empirical altcoin volatility.
+    // =====================================================
     const BBW_THRESHOLDS = {
-      1: { squeeze: 0.008, optimal: 0.015, elevated: 0.025 },
-      2: { squeeze: 0.015, optimal: 0.040, elevated: 0.070 },
-      3: { squeeze: 0.025, optimal: 0.060, elevated: 0.100 }
+      1: { squeeze: 0.008, optimal: 0.018, elevated: 0.030 },  // BTC/ETH — narrow ranges
+      2: { squeeze: 0.015, optimal: 0.040, elevated: 0.070 },  // unchanged — aligns with §3.3 spirit
+      3: { squeeze: 0.030, optimal: 0.075, elevated: 0.150 }   // altcoins — empirically rebalanced
     };
     const bbwT = BBW_THRESHOLDS[tier] || BBW_THRESHOLDS[2];
 

@@ -8,75 +8,111 @@ const inputData = $input.all();
 console.log(`Calculating momentum scores for ${inputData.length} symbols`);
 
 // =====================================================
-// MOMENTUM SCORING LOGIC
+// MOMENTUM SCORING LOGIC — REGIME-AWARE (T-01)
 // =====================================================
+// Calibration rationale:
+//   In STRONG_TREND (ADX >= 25), RSI 60-75 is healthy continuation, not exhaustion.
+//   In NEUTRAL/RANGING (ADX < 25), the same RSI band signals approaching reversal
+//   and exhaustion of the move. The pre-T-01 scoring blanket-rewarded high RSI
+//   regardless of regime, which silently produced late-entry LONGs at structural
+//   tops during NEUTRAL/RANGING markets.
+//   ADX threshold mirrors ADX Market Condition Detector (Branch 1) so both
+//   branches classify the same symbol identically without cross-branch race.
+//   data.adx_2h is propagated by Restore Full Data on every symbol, so this
+//   does not introduce a new data dependency.
+// =====================================================
+
+function getMomentumRegime(adxValue) {
+  const adx = parseFloat(adxValue);
+  if (isNaN(adx) || adx <= 0) return 'UNKNOWN';
+  if (adx >= 25) return 'STRONG_TREND';
+  if (adx >= 15) return 'NEUTRAL';
+  return 'RANGING';
+}
 
 function calculateMomentumScore(scanData) {
   let totalScore = 0;
   let maxScore = 0;
-  
-  // RSI Multi-Timeframe (40 points max)
+
+  const regime = getMomentumRegime(scanData.adx_2h);
+
+  // RSI Multi-Timeframe (40 points max) — regime-aware
   const rsi_2h = parseFloat(scanData.rsi_2h);
   const rsi_1h = parseFloat(scanData.rsi_1h);
-  const rsi_15m = parseFloat(scanData.rsi_15m);
-  
+
   if (!isNaN(rsi_2h) && !isNaN(rsi_1h)) {
     maxScore += 40;
-    
-    // Check alignment (both bullish or both bearish)
+
     const bullish_2h = rsi_2h > 50;
     const bullish_1h = rsi_1h > 50;
-    
+
     if (bullish_2h === bullish_1h) {
-      // Aligned - score based on strength
-      if (bullish_2h) {
-        // Bullish momentum: higher RSI = better (up to 60)
-        const avg_rsi = (rsi_2h + rsi_1h) / 2;
-        if (avg_rsi >= 60) totalScore += 40;
-        else if (avg_rsi >= 55) totalScore += 30;
-        else totalScore += 20;
+      const avg_rsi = (rsi_2h + rsi_1h) / 2;
+      const bullish = bullish_2h;
+
+      if (regime === 'STRONG_TREND') {
+        // Trend continuation tolerant: 60-75 (bullish) / 25-40 (bearish) = peak
+        if (bullish) {
+          if (avg_rsi >= 60 && avg_rsi <= 75) totalScore += 40;       // healthy continuation
+          else if (avg_rsi > 75 && avg_rsi <= 85) totalScore += 30;   // late-stage trend
+          else if (avg_rsi > 85)                  totalScore += 15;   // exhaustion zone
+          else if (avg_rsi >= 55)                 totalScore += 30;   // building
+          else                                    totalScore += 20;   // weak alignment
+        } else {
+          if (avg_rsi <= 40 && avg_rsi >= 25)     totalScore += 40;   // healthy continuation
+          else if (avg_rsi < 25 && avg_rsi >= 15) totalScore += 30;
+          else if (avg_rsi < 15)                  totalScore += 15;   // exhaustion zone
+          else if (avg_rsi <= 45)                 totalScore += 30;
+          else                                    totalScore += 20;
+        }
       } else {
-        // Bearish momentum: lower RSI = stronger bearish
-        const avg_rsi = (rsi_2h + rsi_1h) / 2;
-        if (avg_rsi <= 40) totalScore += 40;
-        else if (avg_rsi <= 45) totalScore += 30;
-        else totalScore += 20;
+        // NEUTRAL / RANGING / UNKNOWN: reversal-aware
+        if (bullish) {
+          if (avg_rsi >= 55 && avg_rsi <= 65)     totalScore += 40;   // sweet spot
+          else if (avg_rsi > 65 && avg_rsi <= 75) totalScore += 25;   // warning
+          else if (avg_rsi > 75)                  totalScore += 10;   // reversal risk
+          else                                    totalScore += 20;   // weak bullish
+        } else {
+          if (avg_rsi <= 45 && avg_rsi >= 35)     totalScore += 40;   // sweet spot
+          else if (avg_rsi < 35 && avg_rsi >= 25) totalScore += 25;
+          else if (avg_rsi < 25)                  totalScore += 10;   // reversal risk
+          else                                    totalScore += 20;
+        }
       }
     } else {
-      // Conflicting signals = weak momentum
-      totalScore += 5;
+      totalScore += 5; // 2h/1h conflict — momentum incoherent
     }
   }
-  
-  // StochRSI (30 points max)
+
+  // StochRSI (30 points max) — regime-aware extreme handling
   const stoch_k_2h = parseFloat(scanData.stochrsi_k_2h);
   const stoch_k_1h = parseFloat(scanData.stochrsi_k_1h);
-  
+
   if (!isNaN(stoch_k_2h) && !isNaN(stoch_k_1h)) {
     maxScore += 30;
-    
-    // Overbought/Oversold zones
-    const bullish_stoch = stoch_k_1h > 20 && stoch_k_1h < 80;
-    const extreme_bullish = stoch_k_1h >= 80;
-    const extreme_bearish = stoch_k_1h <= 20;
-    
-    if (bullish_stoch) {
-      totalScore += 30; // Healthy range
-    } else if (extreme_bullish) {
-      totalScore += 15; // Overbought warning
-    } else if (extreme_bearish) {
-      totalScore += 10; // Oversold warning
+
+    const stochVal = stoch_k_1h;
+
+    if (regime === 'STRONG_TREND') {
+      // Trend tolerant: extreme stoch is OK in continuation
+      if (stochVal >= 20 && stochVal <= 90)      totalScore += 30;    // wide healthy band
+      else if (stochVal > 90)                    totalScore += 15;    // approaching exhaustion
+      else                                       totalScore += 10;    // oversold (potential reversal)
+    } else {
+      // RANGING/NEUTRAL: extreme stoch is exhaustion signal
+      if (stochVal >= 20 && stochVal <= 75)      totalScore += 30;
+      else if (stochVal > 75 && stochVal <= 85)  totalScore += 15;    // warning
+      else if (stochVal > 85)                    totalScore += 5;     // exhaustion
+      else if (stochVal < 20)                    totalScore += 10;
     }
   }
-  
-  // Williams %R (30 points max)
+
+  // Williams %R (30 points max) — unchanged, already direction-aware via WillR semantics
   const willr_2h = parseFloat(scanData.willr_2h);
-  const willr_15m = parseFloat(scanData.willr_15m);
-  
+
   if (!isNaN(willr_2h)) {
     maxScore += 30;
-    
-    // WillR ranges from -100 to 0
+
     if (willr_2h >= -20) {
       totalScore += 10; // Overbought
     } else if (willr_2h >= -50) {
@@ -87,12 +123,13 @@ function calculateMomentumScore(scanData) {
       totalScore += 10; // Oversold
     }
   }
-  
+
   // Calculate final score (0-100)
   const finalScore = maxScore > 0 ? Math.round((totalScore / maxScore) * 100) : 0;
-  
+
   return {
     score: finalScore,
+    regime: regime,
     components: {
       rsi_contribution: maxScore >= 40 ? Math.round((totalScore / maxScore) * 40) : 0,
       stochrsi_contribution: maxScore >= 30 ? 30 : 0,
@@ -113,12 +150,13 @@ const results = inputData.map(item => {
   
   const momentum = calculateMomentumScore(scanData);
   
-  console.log(`Momentum Score: ${momentum.score}/100`);
-  
+  console.log(`Momentum Score: ${momentum.score}/100 (regime: ${momentum.regime})`);
+
   return {
     json: {
       ...data, // ✅ Запазваме всички данни
       momentum_score: momentum.score,
+      momentum_regime: momentum.regime,
       momentum_components: momentum.components,
       scored_at: new Date().toISOString()
     }

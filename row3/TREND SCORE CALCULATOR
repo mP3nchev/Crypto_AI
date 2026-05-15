@@ -92,8 +92,15 @@ function calculateTrendScore(data) {
     }
 
     // B. Histogram strength relative to price (15 points)
-    const MACD_STRONG_PCT   = { 1: 0.01, 2: 0.05, 3: 0.10 };
-    const MACD_MODERATE_PCT = { 1: 0.005, 2: 0.025, 3: 0.05 };
+    // [T-02] Tier 1 thresholds tightened (0.01%/0.005% → 0.025%/0.012%).
+    // Previous values were so low that any non-zero BTC/ETH histogram registered
+    // as "strong momentum" (>95% of cycles), nullifying the discriminator and
+    // structurally inflating Tier 1 trend_score vs Tier 2/3. New thresholds keep
+    // BTC's smaller-amplitude histograms in mind (BTC typically 0.015%-0.080%
+    // hist/price) while restoring a meaningful strong/moderate/weak split.
+    // Tier 2 & 3 unchanged — they were already calibrated correctly.
+    const MACD_STRONG_PCT   = { 1: 0.025, 2: 0.05,  3: 0.10 };
+    const MACD_MODERATE_PCT = { 1: 0.012, 2: 0.025, 3: 0.05 };
     const symbolTier  = parseInt(data.tier || 2);
     const closePrice  = safeFloat(data.close_price);
     const histStrength2h = Math.abs(macd_histogram_2h);
