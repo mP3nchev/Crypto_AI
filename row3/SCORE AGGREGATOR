@@ -109,6 +109,51 @@ const results = inputData.map((item, index) => {
     return null;
   }
 
+  // =====================================================
+  // [A-02] BRANCH-OUTPUT FAIL-FAST — extend WEIGHTS_MISSING coverage to inputs 2-5
+  //
+  // Merge SQL preserves the symbol via LEFT JOIN even when an input branch
+  // (Momentum=input2, Volatility=input3, Trend=input4, Volume/PA=input5) emits no
+  // record. The affected score columns then arrive as SQL NULL. parseFloat(null || 0)
+  // silently coerces that to 0, indistinguishable from a legitimate zero score
+  // (e.g. trend_score = 0 when all MACD/EMA fields are missing). The result was a
+  // phantom signal: weighted contribution of a critical 25-40% component dropped
+  // to zero without warning, coherence penalty auto-triggered, and a malformed
+  // record entered Hard Filters where the dynamic floor is tier+ADX-based, not
+  // component-completeness-based.
+  //
+  // Fix: validate the raw upstream fields BEFORE the parseFloat fallback. A null
+  // or undefined value (branch produced no row) is fatal; NaN is fatal; a numeric
+  // 0 is legitimate and allowed. trend_direction missing also indicates Trend
+  // branch failure and must abort.
+  //
+  // This is paired with the WEIGHTS_MISSING sentinel above so all 5 branches are
+  // now covered symmetrically.
+  // =====================================================
+  const branchOutputs = {
+    momentum_score:     data.momentum_score,
+    trend_score:        data.trend_score,
+    volatility_score:   data.volatility_score,
+    volume_score:       data.volume_score,
+    price_action_score: data.price_action_score,
+    trend_direction:    data.trend_direction
+  };
+  const missingBranchOutputs = Object.entries(branchOutputs)
+    .filter(([key, value]) => {
+      if (value === null || value === undefined) return true;
+      if (key === 'trend_direction') {
+        return !['LONG', 'SHORT', 'NEUTRAL'].includes(value);
+      }
+      const num = typeof value === 'number' ? value : parseFloat(value);
+      return isNaN(num);
+    })
+    .map(([key]) => key);
+
+  if (missingBranchOutputs.length > 0) {
+    console.error(`[A-02] BRANCH_OUTPUT_MISSING for ${data.symbol}: ${missingBranchOutputs.join(', ')} — one or more scoring branches failed to emit output (null/NaN, not legitimate zero). Signal excluded to prevent phantom propagation.`);
+    return null;
+  }
+
   console.log(`  Market: ${marketCondition} (ADX: ${adxStrength})`);
   
   // =====================================================

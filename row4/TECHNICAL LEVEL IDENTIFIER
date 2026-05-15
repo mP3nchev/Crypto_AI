@@ -32,7 +32,16 @@ if (inputData.length === 0) {
 // =====================================================
 function calculateEntryZone(data) {
   const symbol = data.symbol || 'UNKNOWN';
-  const currentPrice = parseFloat(data.latest_1m_price || data.current_price || data.close_price || 0);
+  // [W-05] Use the price already resolved by TP-SL CALCULATOR (entry_price).
+  // TP-SL applies the 3% 1m-vs-2h deviation guard and writes the chosen price as
+  // entry_price; SL and TP are computed from the same value. Reading entry_price
+  // here guarantees the entry zone, stop_loss and take_profit share a single
+  // price reference. The earlier behaviour (always latest_1m_price) caused entry
+  // zones to drift outside SL/TP envelopes during news-driven 1m spikes, which
+  // then tripped Entry Zone Validator's SL/TP clearance checks on legitimate
+  // setups. Fallback chain preserves backward compatibility for any node that
+  // bypasses TP-SL Calculator.
+  const currentPrice = parseFloat(data.entry_price || data.latest_1m_price || data.current_price || data.close_price || 0);
   const signalDirection = data.signal_direction || 'NEUTRAL';
   
   // Technical levels for reference
