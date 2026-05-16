@@ -13,6 +13,10 @@
 -- получава всичко необходимо за Row 3 scoring без промени на canvas-а.
 -- =====================================================
 
+-- Drop двете overloaded версии преди да създадем новата
+DROP FUNCTION IF EXISTS public.get_scan_results_with_symbols(character varying);
+DROP FUNCTION IF EXISTS public.get_scan_results_with_symbols(text);
+
 CREATE OR REPLACE FUNCTION get_scan_results_with_symbols(p_scan_cycle_id text)
 RETURNS TABLE (
   -- ── Идентификация ──────────────────────────────────
