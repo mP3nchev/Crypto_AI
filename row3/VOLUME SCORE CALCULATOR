@@ -216,10 +216,15 @@ function calculateVolumeScore(data) {
     console.log(`  Ratio Multiplier: ×${ratioMultiplier.toFixed(2)} (${volumeStatusFromRatio})`);
   }
 
-  const baseScore = maxScore > 0 ? Math.round((totalScore / maxScore) * 100) : 0;
+  // [T-09] Fixed-denominator normalization (OBV 50 + Volume 30 + BBW 20 = 100).
+  // Pre-fix: (totalScore / maxScore) * 100 inflated to 100% when only one
+  // component had data. Missing components now correctly score 0 of their max.
+  const STRUCTURAL_MAX = 100;
+  const baseScore  = Math.round((totalScore / STRUCTURAL_MAX) * 100);
   const finalScore = Math.round(baseScore * ratioMultiplier);
+  const dataCompletenessPct = Math.round((maxScore / STRUCTURAL_MAX) * 100);
 
-  console.log(`  Volume Score: ${baseScore}/100 × ${ratioMultiplier.toFixed(2)} = ${finalScore}/100`);
+  console.log(`  Volume Score: ${baseScore}/100 × ${ratioMultiplier.toFixed(2)} = ${finalScore}/100 | data_completeness: ${dataCompletenessPct}%`);
 
   return {
     score: finalScore,
@@ -227,7 +232,8 @@ function calculateVolumeScore(data) {
     ratio_multiplier: ratioMultiplier,
     penalty: 0,                       // [W-02] retained for backward compatibility; always 0 now
     volume_ratio: volumeRatio,
-    status: volumeStatusFromRatio === 'NORMAL' ? 'GOOD' : volumeStatusFromRatio
+    status: volumeStatusFromRatio === 'NORMAL' ? 'GOOD' : volumeStatusFromRatio,
+    data_completeness_pct: dataCompletenessPct
   };
 }
 
@@ -254,6 +260,7 @@ const results = inputData
         volume_penalty: volume.penalty,             // always 0 post W-02 (kept for audit + downstream compatibility)
         volume_ratio: volume.volume_ratio,
         volume_status: volume.status,
+        volume_data_completeness_pct: volume.data_completeness_pct,
         scored_at: new Date().toISOString()
       }
     };

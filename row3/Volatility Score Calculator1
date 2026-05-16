@@ -115,9 +115,13 @@ function calculateVolatilityScore(scanData, tier, atrThresholdLow, atrThresholdH
     components.bbw_tier_thresholds = bbwT;
   }
   
-  // Calculate final score (0-100)
-  const finalScore = maxScore > 0 ? Math.round((totalScore / maxScore) * 100) : 0;
-  
+  // [T-09] Fixed-denominator normalization (ATR 60 + BBW 40 = 100).
+  // Pre-fix: (totalScore / maxScore) * 100 inflated to 100% when only ATR
+  // OR only BBW had data. Missing components now correctly score 0 of max.
+  const STRUCTURAL_MAX = 100;
+  const finalScore = Math.round((totalScore / STRUCTURAL_MAX) * 100);
+  const dataCompletenessPct = Math.round((maxScore / STRUCTURAL_MAX) * 100);
+
   return {
     score: finalScore,
     status: volatilityStatus,
@@ -126,7 +130,8 @@ function calculateVolatilityScore(scanData, tier, atrThresholdLow, atrThresholdH
     tier_thresholds: {
       low: atrThresholdLow,
       high: atrThresholdHigh
-    }
+    },
+    data_completeness_pct: dataCompletenessPct
   };
 }
 
@@ -200,7 +205,8 @@ const results = inputData.map((item, index) => {
       volatility_status: volatility.status,
       volatility_components: volatility.components,
       atr_percentage: volatility.atr_percentage,
-      
+      volatility_data_completeness_pct: volatility.data_completeness_pct,
+
       // Metadata
       volatility_scored_at: new Date().toISOString()
     }

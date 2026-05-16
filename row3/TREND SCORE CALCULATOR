@@ -176,20 +176,35 @@ function calculateTrendScore(data) {
       score: 0,
       components: { adx_contribution: 0, macd_contribution: 0, ema_contribution: 0, trend_score_legacy: 0, trend_score_v4: 0 },
       trend_strength: 'WEAK', trend_direction: 'NEUTRAL',
-      signal_direction: 'NEUTRAL', macd_histogram_pct: 0
+      signal_direction: 'NEUTRAL', macd_histogram_pct: 0,
+      data_completeness_pct: 0
     };
   }
 
   // =====================================================
-  // CALCULATE FINAL SCORE -- outside all component blocks [T-04 Bug 3 fix]
+  // [T-09] FIXED-DENOMINATOR NORMALIZATION
   // =====================================================
-  const finalScore  = Math.round((totalScore / maxScore) * 100);
+  // Bug pre-T-09: finalScore = (totalScore / maxScore) * 100
+  //   maxScore was incremented per-component only when data was present,
+  //   so a symbol with ONLY ADX (40 pts) and missing MACD/EMA scored
+  //   40/40 = 100, falsely claiming "perfect trend" exactly when data
+  //   was incomplete. Combined with missing-data driven Row 3 failures,
+  //   this produced phantom STRONG signals.
+  //
+  // Fix: denominator is fixed at the structural max (40 ADX + 30 MACD +
+  // 30 EMA = 100). Missing components contribute 0 of their max instead
+  // of being silently rescaled out. data_completeness_pct (maxScore/100)
+  // is exposed so downstream can detect partial-data scoring.
+  // =====================================================
+  const STRUCTURAL_MAX     = 100;            // 40 ADX + 30 MACD + 30 EMA
+  const finalScore         = Math.round((totalScore / STRUCTURAL_MAX) * 100);
+  const dataCompletenessPct = Math.round((maxScore / STRUCTURAL_MAX) * 100);
 
-  // [T-04 calibration] legacy = ADX+EMA only, matches pre-v4.0 behaviour (MACD was silently 0)
-  const legacyScore = Math.round((adxContribution + emaContribution) / maxScore * 100);
+  // legacy = ADX+EMA only, kept for audit comparison vs pre-v4.0 behaviour
+  const legacyScore = Math.round(((adxContribution + emaContribution) / STRUCTURAL_MAX) * 100);
 
   console.log(`    ADX: ${adxContribution}/40 | MACD: ${macdContribution}/30 | EMA: ${emaContribution}/30`);
-  console.log(`    Total: ${totalScore}/${maxScore} -> ${finalScore}/100 (legacy: ${legacyScore}/100)`);
+  console.log(`    Total: ${totalScore}/${STRUCTURAL_MAX} -> ${finalScore}/100 (legacy: ${legacyScore}/100) | data_completeness: ${dataCompletenessPct}%`);
   console.log(`    Direction: ${trendDirection} | Strength: ${trendStrength}`);
 
   return {
@@ -204,7 +219,8 @@ function calculateTrendScore(data) {
     trend_strength:     trendStrength,
     trend_direction:    trendDirection,
     signal_direction:   trendDirection,
-    macd_histogram_pct: histogramPct
+    macd_histogram_pct: histogramPct,
+    data_completeness_pct: dataCompletenessPct  // [T-09] partial-data detector
   };
 }
 
@@ -224,8 +240,9 @@ const results = inputData.map((item, index) => {
       trend_strength:   trend.trend_strength,
       trend_direction:  trend.trend_direction,
       macd_histogram_pct: trend.macd_histogram_pct,
+      trend_data_completeness_pct: trend.data_completeness_pct,
       trend_scored_at:  new Date().toISOString(),
-      trend_calculator_version: 'v4.0 (T-04 Fixed)'
+      trend_calculator_version: 'v4.1 (T-09 Fixed Normalization)'
     }
   };
 });

@@ -138,14 +138,21 @@ if (!isNaN(vwap_1h) && !isNaN(price_for_vwap) && vwap_1h > 0) {
   // FINAL SCORE
   // =====================================================
   
-  const finalScore = maxScore > 0 ? Math.round((totalScore / maxScore) * 100) : 0;
+  // [T-09] Fixed-denominator normalization (50 VWAP + 30 Position + 20 EMA = 100).
+  // Pre-fix: (totalScore / maxScore) * 100 inflated to 100% when only one
+  // component had data (e.g. VWAP only: 50/50 = 100). Missing components
+  // now correctly contribute 0 of their max instead of being rescaled out.
+  const STRUCTURAL_MAX = 100;
+  const finalScore = Math.round((totalScore / STRUCTURAL_MAX) * 100);
+  const dataCompletenessPct = Math.round((maxScore / STRUCTURAL_MAX) * 100);
   const priceStructure = close_price > vwap_1h ? 'BULLISH' : 'BEARISH';
-  
-  console.log(`  Price Action Score: ${finalScore}/100 (${priceStructure})`);
-  
+
+  console.log(`  Price Action Score: ${finalScore}/100 (${priceStructure}) | data_completeness: ${dataCompletenessPct}%`);
+
   return {
     score: finalScore,
-    price_structure: priceStructure
+    price_structure: priceStructure,
+    data_completeness_pct: dataCompletenessPct
   };
 }
 
@@ -162,6 +169,7 @@ const results = inputData.map(item => {
       ...data,
       price_action_score: priceAction.score,
       price_structure: priceAction.price_structure,
+      price_action_data_completeness_pct: priceAction.data_completeness_pct,
       scored_at: new Date().toISOString()
     }
   };
