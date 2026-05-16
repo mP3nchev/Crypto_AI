@@ -42,7 +42,9 @@ const tierRecords = volatilityResults.map(item => {
       max_suggested_leverage: data.max_suggested_leverage,
       
       // ===== CYCLE TRACKING =====
-      cycle_timestamp: data.cycle_timestamp,
+      // cycle_timestamp is null when Row 3 starts from Supabase (crypto_symbols
+      // has no cycle_timestamp column). Derive from scan_cycle_id or use NOW().
+      cycle_timestamp: data.cycle_timestamp || new Date().toISOString(),
       scan_cycle_id: data.scan_cycle_id,
       
       // ===== METADATA =====
