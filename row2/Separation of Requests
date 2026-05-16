@@ -2,14 +2,16 @@
 const validItems = $input.all().filter(item => !item.json.exclude_from_taapi);
 
 // =====================================================
-// TAAPI SECRET KEY -- [A-01] sourced from N8N env, never inline
-// Configure: N8N -> Settings -> Environment Variables -> TAAPI_SECRET_KEY
-// Node halts explicitly when the variable is absent or empty.
+// TAAPI SECRET KEY — intentionally NOT here.
+//
+// Free N8N Cloud does not support $env variables. The secret is
+// configured directly in the downstream HTTP Request node body
+// (N8N canvas → body parameter "secret"). This keeps the key out
+// of git-tracked code while storing it in N8N Cloud's encrypted DB.
+//
+// Canvas HTTP Request node body must be:
+//   { "secret": "<your_taapi_key>", "construct": {{ $json.construct }} }
 // =====================================================
-const SECRET_KEY = $env.TAAPI_SECRET_KEY;
-if (!SECRET_KEY) {
-  throw new Error('CRITICAL [A-01]: TAAPI_SECRET_KEY env var is missing or empty. Set it in N8N environment variables before running this workflow.');
-}
 
 // =====================================================
 // INPUT VALIDATION
@@ -119,7 +121,7 @@ for (let i = 0; i < inputItems.length; i++) {
 
   allRequests.push({
     json: {
-      secret: SECRET_KEY,
+      // secret is NOT passed here — lives in HTTP Request node body only
       construct: constructA,
       symbol: symbol,
       symbol_id: symbol_id,
