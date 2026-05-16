@@ -1,0 +1,62 @@
+# MERGE TAAPI INDICATORS — N8N Canvas Setup
+
+## Problem being solved
+
+"Fetch Data AFTER TAAPI" (HTTP Request → Supabase RPC) returns only 3 indicators:
+  rsi_2h, adx_2h, ema_200_2h
+
+This causes all Row 3 scoring branches to produce 0:
+- current_atr_1h = 0  →  volatility_status = UNKNOWN
+- momentum_score = 0  (missing MACD, StochRSI, WillR, MFI, RSI)
+- volume_score = 0    (missing OBV, BBW)
+- price_action_score = 0  (missing VWAP, close_price, high_price, low_price)
+- trend_score = 100   (false positive: only ADX present, formula divides by 1 instead of 4)
+
+## Fix: Insert Code node between "Fetch Data AFTER TAAPI" and "ASSET TIER CALCULATOR"
+
+### Step-by-step canvas changes
+
+1. **Keep** the "Fetch Data AFTER TAAPI" HTTP Request node (it provides rank_position).
+
+2. **Disconnect** the wire from "Fetch Data AFTER TAAPI" → "ASSET TIER CALCULATOR".
+
+3. **Create** a new Code node named exactly:
+   ```
+   MERGE TAAPI INDICATORS
+   ```
+
+4. **Connect** wires:
+   ```
+   Fetch Data AFTER TAAPI  →  MERGE TAAPI INDICATORS  →  ASSET TIER CALCULATOR
+   ```
+
+5. **Paste** the code from `row3/MERGE TAAPI INDICATORS` into the Code node.
+
+6. **Settings**: Execute Once = OFF (processes all items).
+
+### Cross-references used (no additional wiring needed)
+
+The Code node reads two other nodes via `$(nodeName).all()`:
+
+| Reference | Node name (must match exactly) | What it provides |
+|-----------|-------------------------------|-----------------|
+| `$('TAAPI RESPONSE PROCESSOR').all()` | TAAPI RESPONSE PROCESSOR | All 25+ TAAPI indicators |
+| `$('BINANCE CANDLE PROCESSOR').all()` | BINANCE CANDLE PROCESSOR | close_price, high_price, low_price per symbol |
+
+Both nodes must have already run in the same workflow execution (they are in Row 2 / Row 1 respectively, which run before Row 3). Cross-row references work because all rows are in a single N8N workflow execution.
+
+### What "Fetch Data AFTER TAAPI" still provides
+
+- `rank_position` — used by ASSET TIER CALCULATOR to assign Tier 1/2/3
+- `symbol_id` — FK for asset_tiers Supabase insert
+- `scan_cycle_id` — as a secondary reference (TAAPI RESPONSE PROCESSOR is primary)
+
+### After this fix, expect
+
+- ATR Volatility Analyzer2: `current_atr_1h` → real value (not 0)
+- Volatility Score Calculator1: `volatility_status` → LOW/NORMAL/HIGH/EXTREME
+- MOMENTUM SCORE CALCULATOR: real MACD, RSI, StochRSI values
+- VOLUME SCORE CALCULATOR: real OBV, BBW values
+- TREND SCORE CALCULATOR: real ADX + EMA trend values
+- Price Action Score Calculator: real VWAP, close_price, high/low values
+- SCORE AGGREGATOR: total_score reflects actual market conditions

@@ -1,0 +1,221 @@
+// =====================================================
+// NODE: MERGE TAAPI INDICATORS
+// =====================================================
+// Позиция в canvas: между "Fetch Data AFTER TAAPI" и "ASSET TIER CALCULATOR"
+//
+// ПРОБЛЕМ: "Fetch Data AFTER TAAPI" вика Supabase RPC get_scan_results_with_symbols
+// и получава само 3 индикатора (rsi_2h, adx_2h, ema_200_2h) + rank_position.
+// Нито TAAPI RESPONSE PROCESSOR, нито Supabase записват close_price, high_price,
+// low_price — те са само в BINANCE CANDLE PROCESSOR (Row 1).
+// Всички 25+ TAAPI индикатора са само в N8N паметта след Row 2.
+//
+// FIX: Row 1, 2 и 3 са в ЕДИН workflow execution — можем да правим кръстосани
+// reference-и. Мержираме 3 source-а по symbol:
+//
+//   SOURCE A — Fetch Data AFTER TAAPI (Supabase):
+//     rank_position, symbol_id, id, scan_metadata
+//
+//   SOURCE B — TAAPI RESPONSE PROCESSOR (N8N памет):
+//     atr_1h, rsi_*, adx_2h, macd_*, vwap_1h, obv_1h, bbw_1h,
+//     ema_*, stochrsi_*, willr_*, mfi_*, rsi_15m, willr_15m, sma_20
+//
+//   SOURCE C — BINANCE CANDLE PROCESSOR (N8N памет):
+//     close_price, high_price, low_price (latest 2h candle per symbol)
+//
+// РЕЗУЛТАТ: ASSET TIER CALCULATOR → ATR Volatility Analyzer2 → scoring branches
+// получават ВСИЧКО необходимо за коректно scoring.
+// =====================================================
+
+console.log('🌉 ═══════════════════════════════════════════════');
+console.log('   MERGE TAAPI INDICATORS v1.0');
+console.log('═══════════════════════════════════════════════');
+
+// =====================================================
+// SOURCE A: Supabase — rank_position + scan metadata
+// =====================================================
+const supabaseData = $input.all();
+console.log(`📥 Source A (Supabase / rank_position): ${supabaseData.length} records`);
+
+if (supabaseData.length === 0) {
+  throw new Error('[MERGE TAAPI] Source A empty — "Fetch Data AFTER TAAPI" returned 0 records');
+}
+
+// =====================================================
+// SOURCE B: TAAPI RESPONSE PROCESSOR — full indicator set
+// =====================================================
+const taapiData = $('TAAPI RESPONSE PROCESSOR').all();
+console.log(`📥 Source B (TAAPI indicators): ${taapiData.length} records`);
+
+if (taapiData.length === 0) {
+  throw new Error(
+    '[MERGE TAAPI] Source B empty — TAAPI RESPONSE PROCESSOR returned 0 records. ' +
+    'Check node name spelling or upstream TAAPI API failure.'
+  );
+}
+
+// Build lookup: symbol → full TAAPI record
+const taapiBySymbol = new Map();
+taapiData.forEach(item => {
+  if (item.json.symbol) taapiBySymbol.set(item.json.symbol, item.json);
+});
+
+// =====================================================
+// SOURCE C: BINANCE CANDLE PROCESSOR — close/high/low prices
+// =====================================================
+const candleData = $('BINANCE CANDLE PROCESSOR').all();
+console.log(`📥 Source C (Binance candles): ${candleData.length} candle records`);
+
+// Extract latest 2h close/high/low per symbol (candles sorted desc — first is newest)
+const priceBySymbol = new Map();
+candleData.forEach(item => {
+  const d = item.json;
+  if (d.interval === '2h' && d.symbol && !priceBySymbol.has(d.symbol)) {
+    priceBySymbol.set(d.symbol, {
+      close_price: parseFloat(d.close_price || 0),
+      high_price:  parseFloat(d.high_price  || 0),
+      low_price:   parseFloat(d.low_price   || 0),
+      cs_volume:   parseFloat(d.volume      || 0)
+    });
+  }
+});
+console.log(`   Extracted 2h prices for ${priceBySymbol.size} symbols`);
+
+// =====================================================
+// MERGE: A + B + C per symbol
+// =====================================================
+const merged = [];
+const noTaapiMatch   = [];
+const noPriceMatch   = [];
+
+supabaseData.forEach(item => {
+  const sbData = item.json;
+  const symbol = sbData.symbol;
+
+  // ── Source B lookup ──
+  const taapiRecord = taapiBySymbol.get(symbol);
+  if (!taapiRecord) {
+    console.warn(`⚠️ [MERGE] No TAAPI match for Supabase symbol: ${symbol} — skipping`);
+    noTaapiMatch.push(symbol);
+    return;
+  }
+
+  // ── Source C lookup ──
+  const prices = priceBySymbol.get(symbol);
+  if (!prices) {
+    console.warn(`⚠️ [MERGE] No 2h candle data for: ${symbol} — prices will be 0`);
+    noPriceMatch.push(symbol);
+  }
+
+  const mergedRecord = {
+    // ── B: Full TAAPI indicators (base layer) ──
+    ...taapiRecord,
+
+    // ── C: Price fields from Binance candles ──
+    close_price: prices?.close_price || 0,
+    high_price:  prices?.high_price  || 0,
+    low_price:   prices?.low_price   || 0,
+    cs_volume:   prices?.cs_volume   || 0,
+
+    // ── A: Supabase overrides (rank_position is critical for tier assignment) ──
+    rank_position: sbData.rank_position,
+    symbol_id:     sbData.symbol_id || taapiRecord.symbol_id,
+    db_scan_time:  sbData.scan_time,
+    // Keep TAAPI scan_cycle_id as authoritative (same value, but ensure it's set)
+    scan_cycle_id: taapiRecord.scan_cycle_id || sbData.scan_cycle_id,
+
+    // ── Merge metadata ──
+    taapi_merge_applied: true,
+    taapi_merge_at: new Date().toISOString()
+  };
+
+  merged.push({ json: mergedRecord });
+  console.log(
+    `✅ ${symbol}: rank=${sbData.rank_position} | ` +
+    `atr_1h=${taapiRecord.atr_1h ?? 'n/a'} | ` +
+    `close=${prices?.close_price?.toFixed?.(4) ?? 'n/a'} | ` +
+    `rsi_2h=${taapiRecord.rsi_2h ?? 'n/a'}`
+  );
+});
+
+// ── TAAPI symbols not in Supabase → conservative rank fallback ──
+taapiBySymbol.forEach((taapiRecord, symbol) => {
+  const alreadyMerged = merged.some(r => r.json.symbol === symbol);
+  if (!alreadyMerged) {
+    const prices = priceBySymbol.get(symbol);
+    console.warn(`⚠️ ${symbol} in TAAPI but not in Supabase — assigning conservative rank 20`);
+    merged.push({
+      json: {
+        ...taapiRecord,
+        close_price: prices?.close_price || 0,
+        high_price:  prices?.high_price  || 0,
+        low_price:   prices?.low_price   || 0,
+        cs_volume:   prices?.cs_volume   || 0,
+        rank_position: 20,
+        taapi_merge_applied: true,
+        taapi_merge_missing_supabase: true,
+        taapi_merge_at: new Date().toISOString()
+      }
+    });
+  }
+});
+
+// =====================================================
+// VALIDATION — required fields for downstream scoring
+// =====================================================
+const REQUIRED_FOR_SCORING = [
+  'atr_1h', 'close_price', 'rsi_2h', 'adx_2h',
+  'macd_value_2h', 'vwap_1h', 'ema_200_2h', 'scan_cycle_id'
+];
+
+let validationWarnings = 0;
+console.log('\n🔍 Required-fields validation:');
+merged.forEach(item => {
+  const d = item.json;
+  const missing = REQUIRED_FOR_SCORING.filter(
+    f => d[f] === undefined || d[f] === null || d[f] === '' || d[f] === 0
+  );
+  if (missing.length > 0) {
+    console.warn(`  ⚠️ ${d.symbol}: missing/zero [${missing.join(', ')}]`);
+    validationWarnings++;
+  }
+});
+if (validationWarnings === 0) console.log('  ✅ All records pass validation');
+
+// =====================================================
+// SUMMARY
+// =====================================================
+console.log('\n╔════════════════════════════════════════════════════╗');
+console.log('║       MERGE TAAPI INDICATORS — SUMMARY             ║');
+console.log('╚════════════════════════════════════════════════════╝');
+console.log(`📥 Supabase records in:     ${supabaseData.length}`);
+console.log(`📥 TAAPI records in:        ${taapiData.length}`);
+console.log(`📥 Candle symbols resolved: ${priceBySymbol.size}`);
+console.log(`✅ Merged records out:      ${merged.length}`);
+console.log(`⚠️ Skipped (no TAAPI):     ${noTaapiMatch.length}${noTaapiMatch.length ? ' → ' + noTaapiMatch.join(', ') : ''}`);
+console.log(`⚠️ No 2h price data:       ${noPriceMatch.length}${noPriceMatch.length ? ' → ' + noPriceMatch.join(', ') : ''}`);
+console.log(`⚠️ Validation warnings:    ${validationWarnings}`);
+
+if (merged.length === 0) {
+  throw new Error(
+    '[MERGE TAAPI] Zero records merged — check symbol name consistency ' +
+    'between Supabase crypto_symbols and TAAPI response'
+  );
+}
+
+// Debug: sample merged record
+const s = merged[0]?.json;
+if (s) {
+  console.log(`\n📋 Sample merged record (${s.symbol}):`);
+  const fields = [
+    'rank_position','close_price','high_price','low_price',
+    'atr_1h','rsi_2h','adx_2h','macd_value_2h','macd_signal_2h',
+    'vwap_1h','obv_1h','bbw_1h','ema_200_2h','ema_20_2h','ema_50_2h',
+    'ema_20_1h','ema_50_1h','stochrsi_k_2h','stochrsi_d_2h',
+    'willr_2h','mfi_2h','rsi_1h','rsi_15m','willr_15m','sma_20','scan_cycle_id'
+  ];
+  fields.forEach(f => console.log(`  ${f}: ${s[f] ?? 'MISSING'}`));
+}
+
+console.log('\n✅ Passing full dataset to ASSET TIER CALCULATOR');
+
+return merged;
