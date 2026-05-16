@@ -1,6 +1,11 @@
-// SORT & SELECT TOP 20 - EXCLUDE STABLE COINS
+// SORT & SELECT TOP N - EXCLUDE STABLE COINS
 
-console.log('🚫 Filtering out stable coins before sorting...');
+// =====================================================
+// LIMIT — change to switch between production (20) and manual verification (5)
+// =====================================================
+const LIMIT = 5;  // TODO: revert to 20 after manual-calc verification cycle
+
+console.log(`🚫 Filtering out stable coins before sorting (LIMIT=${LIMIT})...`);
 
 const stableCoinBlacklist = [
   'USDCUSDT',
@@ -33,18 +38,18 @@ filteredItems.sort((a, b) => {
   return volumeB - volumeA;
 });
 
-const topSymbols = filteredItems.slice(0, 20);
+const topSymbols = filteredItems.slice(0, LIMIT);
 console.log(`🎯 Final selection: ${topSymbols.length} trading pairs`);
 
-console.log(`🥇 Top 20 symbols by volume:`);
+console.log(`🥇 Top ${LIMIT} symbols by volume:`);
 topSymbols.forEach((item, index) => {
   const symbol = item.json.symbol;
   const volume = parseFloat(item.json.quoteVolume).toLocaleString();
   console.log(`   ${index + 1}. ${symbol} - Volume: ${volume}`);
 });
 
-if (topSymbols.length < 20) {
-  console.log(`⚠️  Warning: Only ${topSymbols.length} symbols available after filtering`);
+if (topSymbols.length < LIMIT) {
+  console.log(`⚠️  Warning: Only ${topSymbols.length} symbols available after filtering (expected ${LIMIT})`);
 }
 
 const finalSymbols = topSymbols.map(item => item.json.symbol);
