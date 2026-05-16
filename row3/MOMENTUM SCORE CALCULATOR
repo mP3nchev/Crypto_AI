@@ -1,26 +1,47 @@
 // =====================================================
-// BRANCH 3: MOMENTUM SCORE CALCULATOR
+// BRANCH 3: MOMENTUM SCORE CALCULATOR v2.0
+// [T-09] Fixed normalization + real per-component contributions
+// =====================================================
+//
+// Bugs fixed vs v1.0:
+//
+// 1) ASYMMETRIC NORMALIZATION (mirror of T-09 in TREND):
+//    Old: finalScore = (totalScore / maxScore) * 100
+//    maxScore was incremented per-component only when that component had
+//    data, so a symbol with ONLY RSI (40 pts) and missing StochRSI/WillR
+//    scored 40/40 = 100. Partial data → false "perfect momentum".
+//    Fix: denominator fixed at structural max (40 + 30 + 30 = 100).
+//
+// 2) FAKE COMPONENTS REPORTING:
+//    Old returned:
+//      rsi_contribution: (totalScore/maxScore)*40       // ratio of ALL, not RSI
+//      stochrsi_contribution: maxScore >= 30 ? 30 : 0   // always 30 when present
+//      willr_contribution:    maxScore >= 30 ? 30 : 0   // always 30 when present
+//    These never tracked actual per-indicator points and were useless for audit.
+//    Fix: rsiContribution / stochrsiContribution / willrContribution are
+//    accumulated as separate variables during scoring and reported as-is.
+//
+// 3) data_completeness_pct (maxScore/100) is exposed so SCORE AGGREGATOR
+//    and SIGNAL RANKING can detect partial-data scoring downstream.
+//
+// Regime-aware T-01 calibration retained without changes:
+//   STRONG_TREND (ADX >= 25):
+//     RSI 60-75 bullish / 25-40 bearish = healthy continuation peak
+//   NEUTRAL / RANGING (ADX < 25):
+//     RSI 55-65 bullish / 35-45 bearish = sweet spot (reversal-aware)
+//   ADX threshold mirrors ADX Market Condition Detector (Branch 1)
+//   so both branches classify the same symbol identically.
 // =====================================================
 
-console.log('📈 === MOMENTUM SCORE CALCULATOR START ===');
+console.log('📈 === MOMENTUM SCORE CALCULATOR v2.0 START ===');
 
 const inputData = $input.all();
 console.log(`Calculating momentum scores for ${inputData.length} symbols`);
 
-// =====================================================
-// MOMENTUM SCORING LOGIC — REGIME-AWARE (T-01)
-// =====================================================
-// Calibration rationale:
-//   In STRONG_TREND (ADX >= 25), RSI 60-75 is healthy continuation, not exhaustion.
-//   In NEUTRAL/RANGING (ADX < 25), the same RSI band signals approaching reversal
-//   and exhaustion of the move. The pre-T-01 scoring blanket-rewarded high RSI
-//   regardless of regime, which silently produced late-entry LONGs at structural
-//   tops during NEUTRAL/RANGING markets.
-//   ADX threshold mirrors ADX Market Condition Detector (Branch 1) so both
-//   branches classify the same symbol identically without cross-branch race.
-//   data.adx_2h is propagated by Restore Full Data on every symbol, so this
-//   does not introduce a new data dependency.
-// =====================================================
+const STRUCTURAL_MAX_RSI      = 40;
+const STRUCTURAL_MAX_STOCHRSI = 30;
+const STRUCTURAL_MAX_WILLR    = 30;
+const STRUCTURAL_MAX_TOTAL    = 100;
 
 function getMomentumRegime(adxValue) {
   const adx = parseFloat(adxValue);
@@ -31,18 +52,26 @@ function getMomentumRegime(adxValue) {
 }
 
 function calculateMomentumScore(scanData) {
-  let totalScore = 0;
-  let maxScore = 0;
-
   const regime = getMomentumRegime(scanData.adx_2h);
 
-  // RSI Multi-Timeframe (40 points max) — regime-aware
+  // [T-09] Per-component contributions tracked separately
+  let rsiContribution      = 0;
+  let stochrsiContribution = 0;
+  let willrContribution    = 0;
+
+  // Track which components had usable data (for completeness metric)
+  let rsiPresent      = false;
+  let stochrsiPresent = false;
+  let willrPresent    = false;
+
+  // =====================================================
+  // COMPONENT 1: RSI Multi-Timeframe (40 pts max) — regime-aware
+  // =====================================================
   const rsi_2h = parseFloat(scanData.rsi_2h);
   const rsi_1h = parseFloat(scanData.rsi_1h);
 
   if (!isNaN(rsi_2h) && !isNaN(rsi_1h)) {
-    maxScore += 40;
-
+    rsiPresent = true;
     const bullish_2h = rsi_2h > 50;
     const bullish_1h = rsi_1h > 50;
 
@@ -51,90 +80,101 @@ function calculateMomentumScore(scanData) {
       const bullish = bullish_2h;
 
       if (regime === 'STRONG_TREND') {
-        // Trend continuation tolerant: 60-75 (bullish) / 25-40 (bearish) = peak
         if (bullish) {
-          if (avg_rsi >= 60 && avg_rsi <= 75) totalScore += 40;       // healthy continuation
-          else if (avg_rsi > 75 && avg_rsi <= 85) totalScore += 30;   // late-stage trend
-          else if (avg_rsi > 85)                  totalScore += 15;   // exhaustion zone
-          else if (avg_rsi >= 55)                 totalScore += 30;   // building
-          else                                    totalScore += 20;   // weak alignment
+          if (avg_rsi >= 60 && avg_rsi <= 75)      rsiContribution = 40;
+          else if (avg_rsi > 75 && avg_rsi <= 85)  rsiContribution = 30;
+          else if (avg_rsi > 85)                   rsiContribution = 15;
+          else if (avg_rsi >= 55)                  rsiContribution = 30;
+          else                                     rsiContribution = 20;
         } else {
-          if (avg_rsi <= 40 && avg_rsi >= 25)     totalScore += 40;   // healthy continuation
-          else if (avg_rsi < 25 && avg_rsi >= 15) totalScore += 30;
-          else if (avg_rsi < 15)                  totalScore += 15;   // exhaustion zone
-          else if (avg_rsi <= 45)                 totalScore += 30;
-          else                                    totalScore += 20;
+          if (avg_rsi <= 40 && avg_rsi >= 25)      rsiContribution = 40;
+          else if (avg_rsi < 25 && avg_rsi >= 15)  rsiContribution = 30;
+          else if (avg_rsi < 15)                   rsiContribution = 15;
+          else if (avg_rsi <= 45)                  rsiContribution = 30;
+          else                                     rsiContribution = 20;
         }
       } else {
-        // NEUTRAL / RANGING / UNKNOWN: reversal-aware
         if (bullish) {
-          if (avg_rsi >= 55 && avg_rsi <= 65)     totalScore += 40;   // sweet spot
-          else if (avg_rsi > 65 && avg_rsi <= 75) totalScore += 25;   // warning
-          else if (avg_rsi > 75)                  totalScore += 10;   // reversal risk
-          else                                    totalScore += 20;   // weak bullish
+          if (avg_rsi >= 55 && avg_rsi <= 65)      rsiContribution = 40;
+          else if (avg_rsi > 65 && avg_rsi <= 75)  rsiContribution = 25;
+          else if (avg_rsi > 75)                   rsiContribution = 10;
+          else                                     rsiContribution = 20;
         } else {
-          if (avg_rsi <= 45 && avg_rsi >= 35)     totalScore += 40;   // sweet spot
-          else if (avg_rsi < 35 && avg_rsi >= 25) totalScore += 25;
-          else if (avg_rsi < 25)                  totalScore += 10;   // reversal risk
-          else                                    totalScore += 20;
+          if (avg_rsi <= 45 && avg_rsi >= 35)      rsiContribution = 40;
+          else if (avg_rsi < 35 && avg_rsi >= 25)  rsiContribution = 25;
+          else if (avg_rsi < 25)                   rsiContribution = 10;
+          else                                     rsiContribution = 20;
         }
       }
     } else {
-      totalScore += 5; // 2h/1h conflict — momentum incoherent
+      rsiContribution = 5; // 2h/1h conflict — momentum incoherent
     }
   }
 
-  // StochRSI (30 points max) — regime-aware extreme handling
+  // =====================================================
+  // COMPONENT 2: StochRSI (30 pts max) — regime-aware extreme handling
+  // =====================================================
   const stoch_k_2h = parseFloat(scanData.stochrsi_k_2h);
   const stoch_k_1h = parseFloat(scanData.stochrsi_k_1h);
 
   if (!isNaN(stoch_k_2h) && !isNaN(stoch_k_1h)) {
-    maxScore += 30;
-
+    stochrsiPresent = true;
     const stochVal = stoch_k_1h;
 
     if (regime === 'STRONG_TREND') {
-      // Trend tolerant: extreme stoch is OK in continuation
-      if (stochVal >= 20 && stochVal <= 90)      totalScore += 30;    // wide healthy band
-      else if (stochVal > 90)                    totalScore += 15;    // approaching exhaustion
-      else                                       totalScore += 10;    // oversold (potential reversal)
+      if (stochVal >= 20 && stochVal <= 90)        stochrsiContribution = 30;
+      else if (stochVal > 90)                      stochrsiContribution = 15;
+      else                                         stochrsiContribution = 10;
     } else {
-      // RANGING/NEUTRAL: extreme stoch is exhaustion signal
-      if (stochVal >= 20 && stochVal <= 75)      totalScore += 30;
-      else if (stochVal > 75 && stochVal <= 85)  totalScore += 15;    // warning
-      else if (stochVal > 85)                    totalScore += 5;     // exhaustion
-      else if (stochVal < 20)                    totalScore += 10;
+      if (stochVal >= 20 && stochVal <= 75)        stochrsiContribution = 30;
+      else if (stochVal > 75 && stochVal <= 85)    stochrsiContribution = 15;
+      else if (stochVal > 85)                      stochrsiContribution = 5;
+      else if (stochVal < 20)                      stochrsiContribution = 10;
     }
   }
 
-  // Williams %R (30 points max) — unchanged, already direction-aware via WillR semantics
+  // =====================================================
+  // COMPONENT 3: Williams %R (30 pts max)
+  // =====================================================
   const willr_2h = parseFloat(scanData.willr_2h);
 
   if (!isNaN(willr_2h)) {
-    maxScore += 30;
-
-    if (willr_2h >= -20) {
-      totalScore += 10; // Overbought
-    } else if (willr_2h >= -50) {
-      totalScore += 30; // Strong momentum
-    } else if (willr_2h >= -80) {
-      totalScore += 20; // Moderate
-    } else {
-      totalScore += 10; // Oversold
-    }
+    willrPresent = true;
+    if (willr_2h >= -20)                           willrContribution = 10; // Overbought
+    else if (willr_2h >= -50)                      willrContribution = 30; // Strong
+    else if (willr_2h >= -80)                      willrContribution = 20; // Moderate
+    else                                           willrContribution = 10; // Oversold
   }
 
-  // Calculate final score (0-100)
-  const finalScore = maxScore > 0 ? Math.round((totalScore / maxScore) * 100) : 0;
+  // =====================================================
+  // [T-09] FIXED-DENOMINATOR NORMALIZATION
+  // =====================================================
+  const totalScore = rsiContribution + stochrsiContribution + willrContribution;
+  const finalScore = Math.round((totalScore / STRUCTURAL_MAX_TOTAL) * 100);
+
+  const presentMax =
+    (rsiPresent      ? STRUCTURAL_MAX_RSI      : 0) +
+    (stochrsiPresent ? STRUCTURAL_MAX_STOCHRSI : 0) +
+    (willrPresent    ? STRUCTURAL_MAX_WILLR    : 0);
+  const dataCompletenessPct = Math.round((presentMax / STRUCTURAL_MAX_TOTAL) * 100);
 
   return {
     score: finalScore,
     regime: regime,
     components: {
-      rsi_contribution: maxScore >= 40 ? Math.round((totalScore / maxScore) * 40) : 0,
-      stochrsi_contribution: maxScore >= 30 ? 30 : 0,
-      willr_contribution: maxScore >= 30 ? 30 : 0
-    }
+      rsi_contribution:      rsiContribution,
+      stochrsi_contribution: stochrsiContribution,
+      willr_contribution:    willrContribution,
+      rsi_max:      STRUCTURAL_MAX_RSI,
+      stochrsi_max: STRUCTURAL_MAX_STOCHRSI,
+      willr_max:    STRUCTURAL_MAX_WILLR
+    },
+    components_present: {
+      rsi:      rsiPresent,
+      stochrsi: stochrsiPresent,
+      willr:    willrPresent
+    },
+    data_completeness_pct: dataCompletenessPct
   };
 }
 
@@ -144,21 +184,34 @@ function calculateMomentumScore(scanData) {
 
 const results = inputData.map(item => {
   const data = item.json;
-  const scanData = data.scan_data || data; // ✅ Support both structures
-  
+  const scanData = data.scan_data || data;
+
   console.log(`\n--- ${data.symbol} ---`);
-  
+
   const momentum = calculateMomentumScore(scanData);
-  
-  console.log(`Momentum Score: ${momentum.score}/100 (regime: ${momentum.regime})`);
+
+  const c = momentum.components;
+  console.log(
+    `  RSI: ${c.rsi_contribution}/${c.rsi_max} | ` +
+    `StochRSI: ${c.stochrsi_contribution}/${c.stochrsi_max} | ` +
+    `WillR: ${c.willr_contribution}/${c.willr_max}`
+  );
+  console.log(
+    `  Total: ${c.rsi_contribution + c.stochrsi_contribution + c.willr_contribution}/100 ` +
+    `-> ${momentum.score}/100 | regime: ${momentum.regime} | ` +
+    `data_completeness: ${momentum.data_completeness_pct}%`
+  );
 
   return {
     json: {
-      ...data, // ✅ Запазваме всички данни
+      ...data,
       momentum_score: momentum.score,
       momentum_regime: momentum.regime,
       momentum_components: momentum.components,
-      scored_at: new Date().toISOString()
+      momentum_components_present: momentum.components_present,
+      momentum_data_completeness_pct: momentum.data_completeness_pct,
+      scored_at: new Date().toISOString(),
+      momentum_calculator_version: 'v2.0 (T-09)'
     }
   };
 });
@@ -166,7 +219,9 @@ const results = inputData.map(item => {
 console.log(`\n✅ Momentum scoring complete for ${results.length} symbols`);
 
 const avgScore = results.reduce((sum, r) => sum + (r.json.momentum_score || 0), 0) / results.length;
+const avgCompleteness = results.reduce((sum, r) => sum + (r.json.momentum_data_completeness_pct || 0), 0) / results.length;
 console.log(`📊 Average Momentum Score: ${avgScore.toFixed(1)}/100`);
+console.log(`📊 Average Data Completeness: ${avgCompleteness.toFixed(1)}%`);
 
 console.log('\n✅ Ready for MERGE');
 
