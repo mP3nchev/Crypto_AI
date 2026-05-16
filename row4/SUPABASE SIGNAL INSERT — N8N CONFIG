@@ -1,0 +1,84 @@
+// =====================================================
+// N8N NODE: Supabase Signal Insert
+// Тип:      HTTP Request
+// Позиция:  след SIGNAL LOGGER, преди Loop Over Items
+//
+// ВНИМАНИЕ: Това НЕ е Code node — конфигурира се в N8N UI.
+// Долу са точните стойности за всяко поле.
+// =====================================================
+
+// ── NODE SETTINGS ────────────────────────────────────
+//
+// Name:    Supabase Signal Insert
+// Method:  POST
+// URL:     https://<PROJECT_REF>.supabase.co/rest/v1/telegram_signals
+//          (замени <PROJECT_REF> с реалния от Supabase Dashboard → Settings → API)
+//
+// ── BODY ─────────────────────────────────────────────
+//
+// Body Content Type: JSON
+// Specify Body:      Using JSON
+// JSON Body (expression):
+//   {{ JSON.stringify($json._signal_logger_payload) }}
+//
+//   Важно: Supabase REST API приема масив от обекти за bulk insert.
+//   _signal_logger_payload е масивът, построен от SIGNAL LOGGER.
+//
+// ── HEADERS ──────────────────────────────────────────
+//
+// Header 1:
+//   Name:  apikey
+//   Value: <SUPABASE_ANON_KEY>          (от Supabase Dashboard → Settings → API → anon/public)
+//
+// Header 2:
+//   Name:  Authorization
+//   Value: Bearer <SUPABASE_ANON_KEY>   (същия ключ)
+//
+// Header 3:
+//   Name:  Content-Type
+//   Value: application/json
+//
+// Header 4:
+//   Name:  Prefer
+//   Value: return=minimal               (не връща inserted rows — по-бързо)
+//
+// ── OPTIONS ──────────────────────────────────────────
+//
+// Continue on Fail: OFF  (ако insert гръмне, искаме да разберем веднага)
+// Timeout:          10000 ms
+//
+// ── EXECUTION FLOW ───────────────────────────────────
+//
+// SIGNAL LOGGER слага payload само на item[0].json._signal_logger_payload.
+// Този HTTP Request node се изпълнява ВЕДНЪЖ (за item[0]).
+// След него Loop Over Items чете всички items от SIGNAL LOGGER (не от тук) —
+// свържи Loop Over Items директно към SIGNAL LOGGER, не към Supabase Signal Insert.
+//
+// Canvas order:
+//   SIGNAL RANKING & TOP 5 SELECTION
+//         │
+//         ▼
+//   SIGNAL LOGGER  ──────────────────► Supabase Signal Insert
+//         │                                    (изпълнява се веднъж, за item[0])
+//         ▼
+//   Loop Over Items
+//         │
+//         ▼
+//   Send to Telegram (Telegram node)
+//
+// ── ПРОВЕРКА СЛЕД АКТИВИРАНЕ ─────────────────────────
+//
+// В Supabase → Table Editor → telegram_signals:
+//   очаквай N реда след всеки цикъл (N = брой top сигнали, обикновено 3-5)
+//
+// В N8N execution log:
+//   SIGNAL LOGGER ще покаже: "SIGNAL LOGGER: X records ready for Supabase."
+//   HTTP node ще покаже: HTTP 201 Created (при успех)
+//
+// ── RLS (Row Level Security) ─────────────────────────
+//
+// Ако имаш RLS включен на telegram_signals, добави policy:
+//   CREATE POLICY "service_insert" ON telegram_signals
+//   FOR INSERT TO anon WITH CHECK (true);
+//
+// Или използвай service_role ключ вместо anon в headers (по-сигурно за сървърен N8N).

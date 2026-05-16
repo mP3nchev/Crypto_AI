@@ -290,7 +290,7 @@ if (selectedSignals.length > 0) {
     const data = sig.json;
     console.log(`\n  #${i + 1} ${data.symbol} - ${data.signal_direction}`);
     console.log(`     Score: ${data.total_score.toFixed(2)}/100 | Tier: ${data.tier} | R/R: ${data.fee_adjusted_rr.toFixed(2)}`);
-    console.log(`     Leverage: ${data.recommended_leverage}x | Entry: ${data.entry_zone}`);
+    console.log(`     Leverage: ${data.recommended_leverage}x | Entry: ${data.entry_min?.toFixed(4)}-${data.entry_max?.toFixed(4)}`);
     console.log(`     Market: ${data.market_condition} | Strength: ${data.signal_strength}`);
   });
   

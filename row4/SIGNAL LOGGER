@@ -1,0 +1,101 @@
+// =====================================================
+// SIGNAL LOGGER v1.0
+// Позиция: след SIGNAL RANKING & TOP 5 SELECTION
+//          преди Loop Over Items / Send to Telegram
+// =====================================================
+
+const items = $input.all();
+
+// Guard: no-signal cycle
+if (items.length === 1 && items[0].json.is_no_signal_notification) {
+  console.log('SIGNAL LOGGER: No-signal cycle — skipping DB insert.');
+  return items;
+}
+
+const selectedItems = items.filter(i => i.json.selected_for_telegram === true);
+
+if (selectedItems.length === 0) {
+  console.log('SIGNAL LOGGER: No selected_for_telegram items — skipping.');
+  return items;
+}
+
+console.log(`SIGNAL LOGGER: Building payload for ${selectedItems.length} signals.`);
+
+const insertPayload = selectedItems.map(d => {
+  const data = d.json;
+
+  return {
+    scan_cycle_id:      data.scan_cycle_id,
+    symbol:             data.symbol,
+    tier:               data.tier,
+    signal_direction:   data.signal_direction,
+    final_rank:         data.final_rank,
+
+    // Core trade levels — точни имена от TP-SL CALCULATOR
+    entry_price:        data.entry_price,
+    stop_loss:          data.stop_loss,
+    tp1:                data.take_profit_1 ?? null,
+    tp2:                data.take_profit_2 ?? null,
+    tp3:                data.take_profit_3 ?? null,
+    suggested_leverage: data.recommended_leverage ?? null,
+
+    // Analytics field 1: пазарен режим при генерация
+    market_condition:   data.market_condition ?? null,
+
+    // Analytics field 2: реалното R/R след fees
+    fee_adjusted_rr:    data.fee_adjusted_rr ?? null,
+
+    // Analytics field 3: нормализирана волатилност
+    atr_percentage_1h:  data.atr_percentage_1h ?? null,
+
+    // Analytics field 4: snapshot на всички scores + weights
+    score_snapshot: {
+      momentum:     data.momentum_score     ?? null,
+      trend:        data.trend_score        ?? null,
+      volatility:   data.volatility_score   ?? null,
+      volume:       data.volume_score       ?? null,
+      price_action: data.price_action_score ?? null,
+      total:        data.total_score        ?? null,
+      pre_rr_bonus: data.total_score_pre_rr_bonus ?? null,
+      rr_bonus:     data.rr_bonus_applied_to_total ?? 0,
+      weights: {
+        momentum:     data.weight_momentum     ?? null,
+        trend:        data.weight_trend        ?? null,
+        volatility:   data.weight_volatility   ?? null,
+        volume:       data.weight_volume       ?? null,
+        price_action: data.weight_price_action ?? null
+      }
+    },
+
+    tp_strategy:      data.tp_strategy      ?? null,
+    entry_quality:    data.entry_quality    ?? null,
+    signal_strength:  data.signal_strength  ?? null,
+    confidence_level: data.confidence_level ?? null
+  };
+});
+
+// Attach payload на item[0] за HTTP Request node.
+// Останалите items минават непроменени — Loop Over Items / Telegram
+// ги чете всичките, не само item[0].
+const output = items.map((item, i) => {
+  if (i === 0) {
+    return {
+      json: {
+        ...item.json,
+        _signal_logger_payload: insertPayload,
+        _signal_logger_count:   insertPayload.length
+      }
+    };
+  }
+  return item;
+});
+
+console.log(`SIGNAL LOGGER: ${insertPayload.length} records ready for Supabase.`);
+insertPayload.forEach((p, i) => {
+  console.log(
+    `  ${i + 1}. ${p.symbol} | ${p.signal_direction} | ` +
+    `RR:${p.fee_adjusted_rr?.toFixed(2)} | ${p.market_condition} | ${p.tp_strategy}`
+  );
+});
+
+return output;
