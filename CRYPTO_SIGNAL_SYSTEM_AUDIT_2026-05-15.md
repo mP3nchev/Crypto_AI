@@ -245,8 +245,15 @@ GROUP CANDLE RESPONSES правилно валидира interval gaps и обе
 | P2 | W-03 | Volume soft-disqualification dead code | Low | Low | ДА* |
 | P2 | W-07 | entry_zone undefined в SIGNAL RANKING лог | Low | Low | — |
 | P2 | W-06 | Signal direction MACD-only voting | Med | Med | ДА |
+| P1 | A-07 | ATR thresholds duplicated (hardcoded) в 2 node-а | High | Low | ДА |
 
 *W-03 е автоматично решен от W-02 fix-а: soft-disqualification path-ът беше премахнат заедно с double penalty логиката.
+
+### [A-07] ATR thresholds duplicated между ASSET TIER CALCULATOR и downstream node-ове
+**Проблем:** `atr_threshold_low/high` (T1: 3/6, T2: 6/10, T3: 10/15) бяха дефинирани на две места: ASSET TIER CALCULATOR (TIER_CONFIG + запис в data + asset_tiers DB) и hardcoded повторно в `Volatility Score Calculator1` (if/else блок) + `ATR Volatility Analyzer2` (тих fallback `|| 10 / || 15`). Промяна на праг в едното място → тих divergence в другото. Най-тежък сценарий: липсващ tier insert → ATR Analyzer класифицира Tier 1 символ срещу Tier 3 fallback прагове (10/15 вместо 3/6) → "LOW" volatility вместо реалната класификация.
+**Риск:** High — silent miscalibration на волатилност класификация без runtime сигнал.
+**Fix:** ASSET TIER CALCULATOR е единствен source of truth. Volatility Score Calculator1 и ATR Volatility Analyzer2 четат `data.atr_threshold_low/high` от upstream. Throw (не fallback) при липсваща стойност — upstream проблем трябва да се проявява гласно, не да се маскира с hardcoded числа.
+**QA:** Принудително изтрий `atr_threshold_low` от един input на ATR Analyzer → провери че node throw-ва, не продължава с Tier 3 default.
 
 ### Решени issues по итерации
 
@@ -254,6 +261,8 @@ GROUP CANDLE RESPONSES правилно валидира interval gaps и обе
 
 **Итерация 2 (commit `5681263`):** T-01 (MOMENTUM SCORE CALCULATOR — regime-aware), T-02 (TREND SCORE CALCULATOR — Tier1 MACD), T-04 (Volatility Score Calculator1 — BBW rebalance), T-05 + W-02 (VOLUME SCORE CALCULATOR + VOLUME PENALTY APPLICATOR — re-scale + ratio multiplier + passthrough), W-08 (SIGNAL RANKING & TOP 5 SELECTION — diversification threshold).
 
-**Итерация 3 (commit current):** T-06 (VOLUME SCORE CALCULATOR + SCORE AGGREGATOR — OBV normalised към candle_volume), T-07 (RISK-REWARD SCORE OUTPUT — rr_bonus injection в total_score + signal_strength reclass), W-04 (SCORE AGGREGATOR — coherence penalty gated за scores > 0), W-06 (SCORE AGGREGATOR — RSI directional vote penalty), A-06 (DEBUG + DE-DUPLICATION — fan-out на flat items за row-oriented Supabase schema).
+**Итерация 3 (commit `3403f0f`):** T-06 (VOLUME SCORE CALCULATOR + SCORE AGGREGATOR — OBV normalised към candle_volume), T-07 (RISK-REWARD SCORE OUTPUT — rr_bonus injection в total_score + signal_strength reclass), W-04 (SCORE AGGREGATOR — coherence penalty gated за scores > 0), W-06 (SCORE AGGREGATOR — RSI directional vote penalty), A-06 (DEBUG + DE-DUPLICATION — fan-out на flat items за row-oriented Supabase schema).
+
+**Итерация 4 (commit current):** A-07 (Volatility Score Calculator1 + ATR Volatility Analyzer2 — премахнати hardcoded ATR thresholds; single source of truth = ASSET TIER CALCULATOR; throw на липсваща стойност вместо тих fallback).
 
 **Финална препоръка:** Започни от P0 (един следобед работа), след това P1 пакета T-01/T-02/T-04/T-05/T-10 (калибровки в scoring tables, едновременно). Backtest 30-дневна замразена history между всеки етап. Не пускай нови оптимизации преди да валидираш предишните в реални 5–7 cycles.
