@@ -26,6 +26,12 @@ if (allSignals.length === 0) {
   return [];
 }
 
+// [W-09] Pass-through no-signal sentinel from RISK-REWARD FILTER
+if (allSignals.length === 1 && allSignals[0].json.is_no_signal_notification === true) {
+  console.log('⚠️ [W-09] No-signal sentinel received — passing through unchanged');
+  return allSignals;
+}
+
 // =====================================================
 // TIER-AWARE DYNAMIC SCORE FLOOR FUNCTION
 // =====================================================

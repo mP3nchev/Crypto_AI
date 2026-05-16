@@ -19,6 +19,36 @@ console.log('══════════════════════�
 const allSignals = $input.all();
 console.log(`📊 Ranking ${allSignals.length} validated signals`);
 
+// [W-09] Handle no-signal sentinel from RISK-REWARD FILTER
+if (allSignals.length === 1 && allSignals[0].json.is_no_signal_notification === true) {
+  const rejectedCount = allSignals[0].json.rejected_count || 0;
+  const reasons = allSignals[0].json.rejection_reasons || {};
+  const reasonSummary = Object.entries(reasons)
+    .map(([reason, count]) => `${reason}: ${count}`)
+    .join(', ');
+
+  console.log(`⚠️ [W-09] No-signal sentinel from R/R Filter — ${rejectedCount} candidates rejected`);
+  console.log(`   Reasons: ${reasonSummary || 'N/A'}`);
+
+  return [{
+    json: {
+      telegram_message_type: 'NO_SIGNALS',
+      telegram_text: `📊 *Scan Complete*\n\n` +
+        `🔍 No trading signals met quality filters this cycle.\n\n` +
+        `_${rejectedCount} candidate(s) analyzed — none passed Risk/Reward floor._\n\n` +
+        `⏳ Next scan running shortly.`,
+      internal_error_suppressed: true,
+      original_error: 'ALL_REJECTED_BY_RR_FILTER',
+      rejected_count: rejectedCount,
+      rejection_reasons: reasons,
+      scan_cycle_id: allSignals[0].json.scan_cycle_id,
+      no_signal_at: new Date().toISOString(),
+      selected_for_telegram: false,
+      is_no_signal_notification: true
+    }
+  }];
+}
+
 /// Handle edge case: error object from previous node
 if (allSignals.length === 1 && allSignals[0].json.error) {
   const errorDetail = allSignals[0].json.error;

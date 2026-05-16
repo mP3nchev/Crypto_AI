@@ -312,6 +312,42 @@ console.log(`📤 Passing ${results.length} signals to Risk/Reward Score Output`
 console.log(`\n💡 Note: ${rejectedSignals.length} signals disqualified (not passed forward)`);
 
 // =====================================================
+// [W-09] NO-SIGNAL SENTINEL — prevents downstream "No output data" crash
+//
+// When every candidate fails the R/R floor, returning [] makes N8N stop
+// the workflow ("No output data returned"). SIGNAL RANKING has correct
+// no-signal handling (is_no_signal_notification path), but it never gets
+// reached because RISK-REWARD SCORE OUTPUT / TECHNICAL LEVEL IDENTIFIER /
+// ENTRY ZONE VALIDATOR / HARD FILTERS ENFORCER all return [] on empty
+// input too, breaking the chain.
+//
+// Fix: emit a single sentinel item carrying is_no_signal_notification=true
+// and rr_filter_passed=false. Downstream nodes must check this flag at the
+// top and pass it through unchanged. SIGNAL RANKING then produces the
+// Telegram "no signals this cycle" message.
+// =====================================================
+if (results.length === 0) {
+  console.log(`\n⚠️ [W-09] All ${inputData.length} candidates failed R/R filter — emitting no-signal sentinel`);
+  return [{
+    json: {
+      is_no_signal_notification: true,
+      rr_filter_passed: false,
+      selected_for_telegram: false,
+      symbol: 'NO_SIGNAL',
+      no_signal_reason: 'ALL_REJECTED_BY_RR_FILTER',
+      rejected_count: rejectedSignals.length,
+      rejection_reasons: rejectedSignals.reduce((acc, r) => {
+        const reason = r.json.rr_disqualification_reason;
+        acc[reason] = (acc[reason] || 0) + 1;
+        return acc;
+      }, {}),
+      scan_cycle_id: inputData[0]?.json?.scan_cycle_id ?? null,
+      no_signal_at: new Date().toISOString()
+    }
+  }];
+}
+
+// =====================================================
 // RETURN ONLY PASSED SIGNALS
 // =====================================================
 return results;
