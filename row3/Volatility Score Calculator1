@@ -141,18 +141,42 @@ const results = inputData.map((item, index) => {
   // ⚠️ Get tier from Supabase response (previous node)
   const tier = parseInt(data.tier || 2);
   
-  // Get tier-specific thresholds
-  let atrLow, atrHigh;
-  
-  if (tier === 1) {
-    atrLow = 3.0;
-    atrHigh = 6.0;
-  } else if (tier === 2) {
-    atrLow = 6.0;
-    atrHigh = 10.0;
-  } else {
-    atrLow = 10.0;
-    atrHigh = 15.0;
+  // =====================================================
+  // [A-07] ATR thresholds read from upstream (ASSET TIER CALCULATOR)
+  //
+  // Previously hardcoded per-tier (T1: 3/6, T2: 6/10, T3: 10/15) — same
+  // values also lived in ASSET TIER CALCULATOR's TIER_CONFIG and were
+  // written to data.atr_threshold_low/high + asset_tiers DB columns.
+  // Two sources of truth meant a calibration change in one node silently
+  // diverged from the other; volatility classification would drift from
+  // the configured tier policy.
+  //
+  // Fix: ASSET TIER CALCULATOR is the sole authoritative source. This
+  // node reads atr_threshold_low/high from the data object. If they are
+  // missing, throw loudly — silent fallback to old hardcoded numbers
+  // would mask an upstream pipeline bug (tier insert failure, Restore
+  // Full Data mismatch, schema drift in asset_tiers).
+  // =====================================================
+  const atrLowRaw = data.atr_threshold_low;
+  const atrHighRaw = data.atr_threshold_high;
+
+  if (atrLowRaw === undefined || atrLowRaw === null ||
+      atrHighRaw === undefined || atrHighRaw === null) {
+    throw new Error(
+      `[A-07] ${data.symbol}: missing atr_threshold_low/high from upstream ` +
+      `(tier=${tier}). ASSET TIER CALCULATOR must populate these — refusing ` +
+      `to fall back to hardcoded values which would diverge from tier policy.`
+    );
+  }
+
+  const atrLow = parseFloat(atrLowRaw);
+  const atrHigh = parseFloat(atrHighRaw);
+
+  if (isNaN(atrLow) || isNaN(atrHigh)) {
+    throw new Error(
+      `[A-07] ${data.symbol}: atr_threshold_low/high are not numeric ` +
+      `(low=${atrLowRaw}, high=${atrHighRaw}).`
+    );
   }
   
   if (index < 3) {

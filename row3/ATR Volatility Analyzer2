@@ -65,9 +65,39 @@ const processedResults = tierResults.map(item => {
   // GET TIER THRESHOLDS
   // =====================================================
   
-  const tier = data.tier || 3;
-  const thresholdLow = data.atr_threshold_low || 10;
-  const thresholdHigh = data.atr_threshold_high || 15;
+  // =====================================================
+  // [A-07] ATR thresholds — same root-cause as Volatility Score Calculator1.
+  // ASSET TIER CALCULATOR is the sole source of truth. Throw on missing
+  // values instead of silently defaulting to Tier 3 numbers — the previous
+  // `|| 10 / || 15` fallback was the worst variant: a missing tier insert
+  // for a Tier 1 symbol would be classified against Tier 3 thresholds and
+  // silently misranked.
+  // =====================================================
+  const tier = data.tier;
+  if (tier === undefined || tier === null) {
+    throw new Error(
+      `[A-07] ${data.symbol}: missing tier from upstream — ASSET TIER ` +
+      `CALCULATOR / Restore Full Data must populate it.`
+    );
+  }
+
+  if (data.atr_threshold_low === undefined || data.atr_threshold_low === null ||
+      data.atr_threshold_high === undefined || data.atr_threshold_high === null) {
+    throw new Error(
+      `[A-07] ${data.symbol}: missing atr_threshold_low/high from upstream ` +
+      `(tier=${tier}). Refusing to fall back to Tier 3 hardcoded values.`
+    );
+  }
+
+  const thresholdLow = parseFloat(data.atr_threshold_low);
+  const thresholdHigh = parseFloat(data.atr_threshold_high);
+
+  if (isNaN(thresholdLow) || isNaN(thresholdHigh)) {
+    throw new Error(
+      `[A-07] ${data.symbol}: atr_threshold_low/high not numeric ` +
+      `(low=${data.atr_threshold_low}, high=${data.atr_threshold_high}).`
+    );
+  }
   
   // =====================================================
   // VOLATILITY CLASSIFICATION
