@@ -70,7 +70,14 @@ function calculateVolatilityScore(scanData, tier, atrThresholdLow, atrThresholdH
   }
   
   // Bollinger Bands Width (40 points max) — tier-aware thresholds
-  const bbw_1h = safeFloat(scanData.bbw_1h);
+  const bbw_1h_raw = safeFloat(scanData.bbw_1h);
+
+  // [B-04] TAAPI returns bbw as a percentage value (e.g. 1.49 = 1.49%).
+  // Thresholds below are calibrated in percentage units to match.
+  // Dividing by 100 here would produce ratio form (0.0149) which would NOT
+  // match the thresholds — keep bbw in percentage and calibrate thresholds
+  // accordingly.
+  const bbw_1h = bbw_1h_raw;  // percentage form, e.g. 1.49 = 1.49%
 
   if (bbw_1h > 0) {
     maxScore += 40;
@@ -80,23 +87,17 @@ function calculateVolatilityScore(scanData, tier, atrThresholdLow, atrThresholdH
     // [T-04] Tier-aware BBW thresholds — calibrated for crypto reality
     //
     // TRADING_PRINCIPLES §3.3 defines GLOBAL BBW thresholds (squeeze < 0.02,
-    // optimal 0.02-0.05). That spec was written before per-tier analysis of
-    // crypto BBW distributions. Empirically:
-    //   - BTC/ETH (Tier 1): typical BBW 0.005-0.025; principles threshold OK
-    //   - Mid-caps (Tier 2): typical BBW 0.015-0.060; principles threshold OK
-    //   - Altcoins (Tier 3): typical BBW 0.030-0.150; principles threshold
-    //     SYSTEMATICALLY classifies most altcoins as "elevated"/"extreme",
-    //     suppressing the breakout setups that produce the highest expected
-    //     value in this tier.
-    //
-    // Override is intentional. Tier 2 keeps the principles-compatible band.
-    // Tier 1 tightens slightly (BTC squeezes are very narrow). Tier 3 widens
-    // to fit empirical altcoin volatility.
+    // optimal 0.02-0.05). Those values were in ratio form (0-1). TAAPI returns
+    // bbw_1h in percentage form (0-100), so thresholds are ×100 accordingly.
+    // Empirical per-tier ranges:
+    //   - BTC/ETH (Tier 1): typical BBW 0.5%-2.5%; squeeze below 0.8%
+    //   - Mid-caps (Tier 2): typical BBW 1.5%-6%; squeeze below 1.5%
+    //   - Altcoins (Tier 3): typical BBW 3%-15%; squeeze below 3%
     // =====================================================
     const BBW_THRESHOLDS = {
-      1: { squeeze: 0.008, optimal: 0.018, elevated: 0.030 },  // BTC/ETH — narrow ranges
-      2: { squeeze: 0.015, optimal: 0.040, elevated: 0.070 },  // unchanged — aligns with §3.3 spirit
-      3: { squeeze: 0.030, optimal: 0.075, elevated: 0.150 }   // altcoins — empirically rebalanced
+      1: { squeeze: 0.8,  optimal: 1.8,  elevated: 3.0  },  // BTC/ETH — percentage form
+      2: { squeeze: 1.5,  optimal: 4.0,  elevated: 7.0  },  // mid-caps
+      3: { squeeze: 3.0,  optimal: 7.5,  elevated: 15.0 }   // altcoins
     };
     const bbwT = BBW_THRESHOLDS[tier] || BBW_THRESHOLDS[2];
 
