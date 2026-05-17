@@ -75,7 +75,7 @@ candleData.forEach(item => {
 console.log(`✅ Extracted 1m prices for ${priceMap_1m.size} symbols`);
 
 // =====================================================
-// STEP 3: Extract Real Median Volumes from Candle Processor ✅ UPDATED
+// STEP 3: Extract Real Median Volumes + Last Closed 1h Candle Volume
 // =====================================================
 
 console.log('\n📊 === EXTRACTING REAL MEDIAN VOLUMES ===');
@@ -83,22 +83,61 @@ console.log('\n📊 === EXTRACTING REAL MEDIAN VOLUMES ===');
 const medianVolumeMap_1h = new Map();
 const medianVolumeMap_2h = new Map();
 
+// [B-03] Collect ALL 1h candles per symbol so we can pick the last CLOSED one.
+// latest_candles (SQL join) returns the CURRENT in-progress 1h candle which at
+// scan time HH:10 has only ~10min of volume → ratio ~0.1 → hard-disqualified.
+// Binance delivers candles in ascending time order; last index = in-progress,
+// second-to-last = last closed. We accumulate them here and resolve in Step 3b.
+const allCandles_1h = new Map(); // symbol → [{volume, timestamp}, ...]
+
 candleData.forEach(item => {
   const data = item.json;
   const symbol = data.symbol;
-  
+
   // Extract median_volume_1h (already calculated in CANDLE PROCESSOR)
   if (data.median_volume_1h && data.median_volume_1h > 0) {
     if (!medianVolumeMap_1h.has(symbol)) {
       medianVolumeMap_1h.set(symbol, parseFloat(data.median_volume_1h));
     }
   }
-  
+
   // Extract median_volume_2h (for backward compatibility)
   if (data.median_volume_2h && data.median_volume_2h > 0) {
     if (!medianVolumeMap_2h.has(symbol)) {
       medianVolumeMap_2h.set(symbol, parseFloat(data.median_volume_2h));
     }
+  }
+
+  // Accumulate 1h candles for closed-volume extraction (Step 3b)
+  if (data.interval === '1h') {
+    if (!allCandles_1h.has(symbol)) allCandles_1h.set(symbol, []);
+    allCandles_1h.get(symbol).push({
+      volume: parseFloat(data.volume || 0),
+      timestamp: data.timestamp || data.open_time || 0
+    });
+  }
+});
+
+// =====================================================
+// STEP 3b: Pick last CLOSED 1h candle volume per symbol
+//
+// Binance returns candles ascending (oldest first). The last element is the
+// current in-progress candle; second-to-last is the last fully closed candle.
+// Using the closed candle prevents the systematic ~0.1 ratio that occurs at
+// scan time HH:10 (only 10 min of volume vs a full-hour median baseline).
+// =====================================================
+console.log('\n📊 === EXTRACTING LAST CLOSED 1H CANDLE VOLUME ===');
+
+const lastClosedVolume_1h = new Map();
+
+allCandles_1h.forEach((candles, symbol) => {
+  if (candles.length === 0) return;
+  // Second-to-last = last closed; fall back to last if only 1 candle available
+  const closedCandle = candles.length >= 2 ? candles[candles.length - 2] : candles[candles.length - 1];
+  const vol = closedCandle.volume;
+  if (vol > 0) {
+    lastClosedVolume_1h.set(symbol, vol);
+    console.log(`  ✅ ${symbol}: last closed 1h volume = ${vol.toFixed(2)} (from ${candles.length} candles)`);
   }
 });
 
@@ -160,27 +199,33 @@ const restoredData = tierInsertResults.map(tierItem => {
   }
   
   const fullData = matchingFull.json;
-  
+
   // Get median volumes
   const median_1h = medianVolumeMap_1h.get(symbol) || 0;
   const median_2h = medianVolumeMap_2h.get(symbol) || 0;
-  
+
+  // [B-03] Last CLOSED 1h candle volume — authoritative source for volume ratio.
+  // Overrides candle_volume from SQL (latest_candles returns in-progress candle
+  // which at scan time HH:10 has only ~10min of data → ratio ~0.1 → hard-kill).
+  const candle_volume_closed = lastClosedVolume_1h.get(symbol) || 0;
+
   // ✅ Get 1m price
   const latest_1m = priceMap_1m.get(symbol);
-  
+
   console.log(`✅ Restored: ${symbol}`);
   console.log(`   - median_1h: ${median_1h.toFixed(2)}`);
   console.log(`   - median_2h: ${median_2h.toFixed(2)}`);
+  console.log(`   - candle_volume (last closed 1h): ${candle_volume_closed.toFixed(2)}`);
   console.log(`   - latest_1m_price: ${latest_1m ? latest_1m.toFixed(2) : 'N/A (using fallback)'}`);
-  
+
   // =====================================================
-  // MERGE: Full data + Tier info + Medians + 1m price
+  // MERGE: Full data + Tier info + Medians + candle_volume + 1m price
   // =====================================================
-  
+
   return {
     json: {
       ...fullData,  // ✅ ALL original data (rsi, macd, adx, etc.)
-      
+
       // ✅ UPDATE tier info with DB response
       id: tierData.id,
       tier: tierData.tier,
@@ -198,14 +243,17 @@ const restoredData = tierInsertResults.map(tierItem => {
       volatility_warning: tierData.volatility_warning,
       risk_level: tierData.risk_level,
       max_suggested_leverage: tierData.max_suggested_leverage,
-      
+
       // ✅ ADD REAL MEDIAN VOLUMES
-      median_volume_1h: median_1h,        // ✅ NEW: Real 1h median
-      median_volume_2h: median_2h,        // ✅ UPDATED: Real 2h median (not estimation!)
-      
+      median_volume_1h: median_1h,
+      median_volume_2h: median_2h,
+
+      // [B-03] Last CLOSED 1h candle volume (overrides SQL in-progress value)
+      candle_volume: candle_volume_closed,
+
       // ✅ ADD 1M PRICE
-      latest_1m_price: latest_1m || fullData.close_price || fullData.current_price,  // ✅ NEW with fallback
-      
+      latest_1m_price: latest_1m || fullData.close_price || fullData.current_price,
+
       // Metadata от DB
       asset_tiers_saved: true,
       asset_tiers_id: tierData.id,
