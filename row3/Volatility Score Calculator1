@@ -123,9 +123,39 @@ function calculateVolatilityScore(scanData, tier, atrThresholdLow, atrThresholdH
   const finalScore = Math.round((totalScore / STRUCTURAL_MAX) * 100);
   const dataCompletenessPct = Math.round((maxScore / STRUCTURAL_MAX) * 100);
 
+  // [B-06] Composite volatility status combining ATR + BBW signals.
+  // ATR alone misses squeeze patterns: LOW ATR + elevated BBW = Bollinger
+  // squeeze building pressure. Detecting this pattern is high-value because
+  // post-squeeze breakouts tend to be the strongest directional moves.
+  const bbwStatus = components.bbw_contribution !== undefined
+    ? (components.bbw_contribution >= 40 ? 'OPTIMAL'
+      : components.bbw_contribution >= 30 ? 'ELEVATED'
+      : components.bbw_contribution >= 25 ? 'SQUEEZE'
+      : 'EXTREME')
+    : 'UNKNOWN';
+
+  let compositeVolatilityStatus;
+  if (volatilityStatus === 'LOW' && bbwStatus === 'ELEVATED') {
+    compositeVolatilityStatus = 'SQUEEZE_SETUP';      // ← high-value: breakout potential
+  } else if (volatilityStatus === 'LOW' && bbwStatus === 'SQUEEZE') {
+    compositeVolatilityStatus = 'DEEP_SQUEEZE';       // ← very tight, awaiting catalyst
+  } else if (volatilityStatus === 'LOW' && bbwStatus === 'OPTIMAL') {
+    compositeVolatilityStatus = 'LOW_STABLE';         // ← calm, bands normal
+  } else if (volatilityStatus === 'OPTIMAL' && bbwStatus === 'OPTIMAL') {
+    compositeVolatilityStatus = 'IDEAL';              // ← best trading conditions
+  } else if (volatilityStatus === 'OPTIMAL') {
+    compositeVolatilityStatus = `OPTIMAL_BBW_${bbwStatus}`;
+  } else if (volatilityStatus === 'HIGH' || volatilityStatus === 'EXTREME') {
+    compositeVolatilityStatus = volatilityStatus;     // ← high/extreme ATR dominates
+  } else {
+    compositeVolatilityStatus = volatilityStatus;     // ← NORMAL or UNKNOWN passthrough
+  }
+
   return {
     score: finalScore,
-    status: volatilityStatus,
+    status: volatilityStatus,                         // ATR-derived (unchanged for compat)
+    bbw_status: bbwStatus,                            // BBW-derived
+    composite_status: compositeVolatilityStatus,      // [B-06] combined signal
     components: components,
     atr_percentage: atrPercentage,
     tier_thresholds: {
@@ -193,17 +223,19 @@ const results = inputData.map((item, index) => {
   const volatility = calculateVolatilityScore(scanData, tier, atrLow, atrHigh);
   
   if (index < 3) {
-    console.log(`  Volatility Score: ${volatility.score}/100 (${volatility.status})`);
+    console.log(`  Volatility Score: ${volatility.score}/100 (${volatility.status} / BBW: ${volatility.bbw_status} → ${volatility.composite_status})`);
     console.log(`  ATR Percentage: ${volatility.atr_percentage.toFixed(2)}%`);
   }
-  
+
   return {
     json: {
       ...data, // ✅ Запазваме всички данни
-      
+
       // Add volatility scoring
       volatility_score: volatility.score,
-      volatility_status: volatility.status,
+      volatility_status: volatility.status,           // ATR-derived (backward compat)
+      volatility_bbw_status: volatility.bbw_status,   // [B-06] BBW classification
+      volatility_composite: volatility.composite_status, // [B-06] combined status
       volatility_components: volatility.components,
       atr_percentage: volatility.atr_percentage,
       volatility_data_completeness_pct: volatility.data_completeness_pct,
