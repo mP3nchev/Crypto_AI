@@ -65,6 +65,24 @@ A-07 is still open — the Wait node has not been added to the workflow yet.
 Basis: D-01 — `macd_histogram_1h` was referenced in TREND SCORE CALCULATOR but
 never added to the TAAPI request or Merge SELECT, causing systematic SHORT bias.
 
+**NEVER propose a `/strategic-edge` adjustment with `complexity_delta` = MODERATE or HIGH.**
+The command's value comes from recalibrating existing logic — not extending the architecture.
+Any suggestion requiring a new data source, new TAAPI indicator, new N8N node, or simultaneous
+changes to more than 2 constants must be blocked with `STRATEGY_SCOPE_VIOLATION` and redirected
+to `/upgrade`. Single-variable changes are testable; multi-variable bundles are not.
+
+**NEVER re-propose a fix as a `/strategic-edge` adjustment if it already exists in CRYPTO_SIGNAL_SYSTEM_FIX_PLAN.md.**
+Open issues such as D-01 (macd_histogram_1h null), A-07 (missing batch cooldown), and P-01
+(no SL floor) are structural bugs — not calibration targets. If a premortem scenario maps to
+one of these, set `maps_to_open_issue` to the issue ID and reference the FIX_PLAN solution.
+Mixing strategic proposals with documented bug fixes creates conflicting change plans.
+
+**NEVER label a filter as over-restrictive in a `/strategic-edge` analysis without quantifying the near-miss rate.**
+A filter is over-restrictive only when: (a) signals are being rejected within 10% of the threshold
+value at meaningful frequency, OR (b) the filter eliminates > 80% of candidates in normal
+market conditions. A filter that blocks 95% of genuinely low-quality signals is not over-restrictive.
+Unsupported "too tight" claims degrade the quality of strategic analysis.
+
 ---
 
 ## ALWAYS
@@ -98,6 +116,25 @@ a similar dead variable pattern. The actual R/R gate uses `tpsl_calculated` and
 **ALWAYS note the `slDistancePct` edge case when proposing changes to TP-SL CALCULATOR.**
 P-01 is open: there is no minimum `slDistancePct` floor. Any change that affects
 ATR usage or SL calculation must account for the near-zero ATR edge case.
+
+**ALWAYS distinguish structural opportunity loss from calibration opportunity loss in `/strategic-edge` output.**
+Structural: a known bug is causing valid signal rejection (D-01 SHORT bias, A-07 partial data) →
+reference the issue ID, do not generate a new proposal.
+Calibration: a correctly implemented parameter is set at a suboptimal value (TIER_MIN_RR too strict
+in trending markets, Tier 3 avg−15 floor unstable in thin pools) → valid `/strategic-edge` target.
+Conflating the two makes the output useless as an action plan.
+
+**ALWAYS route each `/strategic-edge` proposal to its correct implementation command before returning output.**
+Single-file, LOW/MEDIUM risk change → `/optimize`.
+Multi-file change or any modification to `TIER_MIN_RR` (R-04 SYNC REQUIRED) → `/upgrade` with
+prior `/impact-analysis`. A `/strategic-edge` output is a proposal generator, not an executor.
+Unrouted proposals cannot be acted on and waste the analysis.
+
+**ALWAYS recommend `TEST_IN_SHADOW_MODE` as the default for proposals that touch live filter thresholds.**
+This system delivers live financial signals. A threshold relaxation that improves expectancy by
+8% in trending conditions may also pass high-risk trades during regime transitions.
+Shadow mode means: generate the adjusted signal set in parallel without routing to Telegram,
+then compare results across ≥1 full market cycle (~1 week) before recommending `IMPLEMENT`.
 
 ---
 
@@ -153,3 +190,19 @@ no_breaking_changes_introduced:
   or `row4/HARD FILTERS ENFORCER` without including the identical change in the other node.
 - Action: Refuse the partial change. Output both nodes' current values and the required
   synchronized change. Cite R-04 audit finding.
+
+**`STRATEGY_SCOPE_VIOLATION`**
+- Condition: A `/strategic-edge` proposal requires a new data source, new TAAPI indicator,
+  new N8N node, simultaneous changes to > 2 constants, or has `complexity_delta` = MODERATE
+  or HIGH.
+- Action: Reject the specific proposal. Log the violation reason inline. If the underlying
+  idea has architectural merit, append: "Redirect to `/upgrade [description]` — requires
+  `/impact-analysis` before implementation." Do not block the rest of the `/strategic-edge`
+  output. Continue with remaining proposals that pass the complexity gate.
+
+**`PREMORTEM_INCOMPLETE`**
+- Condition: Fewer than 3 premortem scenarios can be constructed from SYSTEM_MEMORY.md
+  (e.g., OPEN ISSUES section is empty, KNOWN FAILURE ZONES are all resolved, memory is stale).
+- Action: Emit warning. Proceed with what's available (minimum 1 scenario from structural
+  analysis of the filter chain). Recommend `/refresh-memory` to get current issue state.
+  Do not block the command — partial analysis is better than none.

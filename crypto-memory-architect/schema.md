@@ -308,3 +308,77 @@ interface ArchitectureReviewOutput {
   }
 }
 ```
+
+---
+
+## StrategicEdgeOutput
+
+```typescript
+interface StrategicEdgeOutput {
+  command: "/strategic-edge"
+  analysis_target: string             // user-provided context, or "FULL_PIPELINE" if none given
+  timestamp: string                   // ISO-8601 UTC
+  memory_age_days: number
+  memory_stale: boolean
+
+  premortem_scenarios: {
+    id: string                        // "SE-PM-01", "SE-PM-02", ...
+    scenario: string                  // short title: "Bull run — systematic LONG suppression"
+    root_mechanism: string            // specific: "D-01: macd_histogram_1h null → macd_bullish_1h always false"
+    affected_modules: string[]        // from MODULE INDEX only — no invented module names
+    signal_loss_estimate: "LOW" | "MEDIUM" | "HIGH"
+    frequency_of_occurrence: "RARE" | "OCCASIONAL" | "FREQUENT"
+    maps_to_open_issue: string | null // "D-01" / "A-07" etc. if scenario is a known bug
+  }[]                                 // min length: 3
+
+  opportunity_loss_areas: {
+    id: string                        // "SE-OL-01", "SE-OL-02", ...
+    area_name: string                 // e.g., "Near-miss R/R rejection"
+    module: string                    // primary module from MODULE INDEX where loss occurs
+    mechanism: string                 // how valid trades are being rejected
+    loss_magnitude: "LOW" | "MEDIUM" | "HIGH"
+    loss_type: "STRUCTURAL" | "THRESHOLD_CALIBRATION" | "TIMING" | "REGIME_BLINDNESS"
+    quantification: string            // e.g., "Signals with fee_adjusted_rr=1.92 rejected at TIER_MIN_RR=2.0"
+    mapped_issue_id: string | null    // if STRUCTURAL, cite the open issue ID
+  }[]                                 // min length: 2
+
+  proposed_adjustments: {
+    id: string                        // "SE-ADJ-01", "SE-ADJ-02", ...
+    title: string                     // concise name for the adjustment
+    addresses_opportunity: string     // which SE-OL-xx this resolves
+    target_module: string             // from MODULE INDEX
+    target_file: string               // exact path
+    change_type: "PARAMETER_ADJUSTMENT" | "CONDITIONAL_RELAXATION" | "FALLBACK_LOGIC"
+
+    complexity_delta: "NONE" | "MINIMAL"  // MODERATE and HIGH blocked — emit STRATEGY_SCOPE_VIOLATION
+    complexity_justification: string  // why this is NONE or MINIMAL
+
+    // Mandatory R/R Asymmetry Analysis
+    impact_signal_frequency: string   // e.g., "+10-20% in trending markets (ADX > 28)"
+    impact_risk_exposure: string      // e.g., "marginal — 0.1 R/R band within ATR-based SL bounds"
+    profitability_gain_estimate: string // e.g., "+5-8% expectancy in trending regimes"
+    conditions_effective: string      // market/system conditions where this works
+    conditions_fail: string           // market/system conditions where this backfires
+
+    // Implementation routing
+    implement_via: "/optimize" | "/upgrade"
+    requires_impact_analysis: boolean // true if HIGH-risk module or TIER_MIN_RR sync required
+    shadow_mode_recommended: boolean  // true by default for any filter threshold change
+    shadow_mode_reason: string | null // e.g., "regime transitions may surface edge-case passes"
+  }[]
+
+  files_accessed: {
+    path: string
+    reason: string
+  }[]  // max length: 2
+
+  recommendation: "IMPLEMENT" | "TEST_IN_SHADOW_MODE" | "REJECT"
+  recommendation_basis: string        // justification for overall recommendation
+
+  quality_gate: {
+    dependency_chain_verified: boolean
+    minimal_file_access_confirmed: boolean  // true if ≤2 files read (0 if no context)
+    no_breaking_changes_introduced: boolean // always true — /strategic-edge is proposals only
+  }
+}
+```

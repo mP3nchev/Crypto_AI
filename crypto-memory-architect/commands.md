@@ -216,5 +216,125 @@ Logs previous timestamp in a `## PREVIOUS /init` section before overwriting.
 1. Read `.claude/SYSTEM_MEMORY.md`.
 2. Read current skill files in `crypto-memory-architect/`.
 3. Update `SYSTEM_MEMORY.template.md` to reflect current open issues and module index.
-4. Output all 8 files with updated content.
+4. Output all 9 files with updated content (including new `strategic-edge` additions).
 5. Write updated files to `crypto-memory-architect/` directory.
+
+---
+
+## /strategic-edge [context?]
+
+**Purpose:** Strategic profitability analysis of the signal pipeline.
+Identifies where the system loses valid edge through over-filtering, confirmation stacking,
+late-entry patterns, or regime-blind static thresholds. Produces minimal, testable
+micro-adjustment proposals with full risk/reward asymmetry scoring.
+
+**NOT a code-fix tool. NOT a feature-addition tool.**
+This command answers: "Where is the system leaving profit on the table through policy, not bugs?"
+
+**When to use:**
+- Signal frequency feels too low (0–1 signals per cycle when 2–3 are expected)
+- Entries are consistently after the move (price already extended > 5% from ideal entry)
+- System performs unevenly across trending vs. ranging market conditions
+- Before a demo or live deployment to surface hidden strategic weaknesses
+- After resolving P1 open issues — to find the next layer of improvement
+
+**Trigger phrases:** `too few signals`, `late entry`, `missed move`, `over-filtered`,
+`filter too strict`, `signal frequency`, `profitability`, `missed trade`, `strategic edge`,
+`why didn't we catch it early`, `improve expectancy`
+
+---
+
+**Steps:**
+
+1. Read `.claude/SYSTEM_MEMORY.md`.
+   - Check timestamp. If >7 days → emit `MEMORY_STALE` warning before proceeding.
+   - Load: OPEN ISSUES (to avoid re-deriving documented bugs as strategic proposals),
+     MODULE INDEX, DEPENDENCY GRAPH, KNOWN FAILURE ZONES (premortem basis).
+
+2. **Premortem Failure Simulation.**
+   Assume the system has produced low-quality or low-frequency signals for 30 consecutive days.
+   Construct 3–5 specific failure scenarios grounded in this codebase's architecture:
+   - For each scenario: identify the root mechanism, affected modules (from MODULE INDEX),
+     `signal_loss_estimate` (LOW/MEDIUM/HIGH), `frequency_of_occurrence` (RARE/OCCASIONAL/FREQUENT).
+   - Cross-reference each against OPEN ISSUES. If a scenario maps to a known issue
+     (e.g., D-01 SHORT bias, A-07 missing batch cooldown), set `maps_to_open_issue` to
+     the issue ID. Do NOT re-derive a fix for it — reference the FIX_PLAN entry instead.
+
+3. **Opportunity Suppression Detection.**
+   Scan the filter chain from memory (no file reads required):
+   - **Scoring bottleneck:** SCORE AGGREGATOR → dynamic score floor in HARD FILTERS ENFORCER
+   - **R/R bottleneck:** TP-SL CALCULATOR → RISK-REWARD FILTER (TIER_MIN_RR) → HARD FILTERS ENFORCER
+   - **Selection bottleneck:** SIGNAL RANKING & TOP 5 SELECTION (Top-5 cap, Tier 3 avg−15 formula)
+   - Identify near-miss patterns: signals rejected at ≤10% above a threshold value.
+   - Classify each area:
+     - `STRUCTURAL` → maps to an existing open issue ID → reference it, do not re-propose
+     - `THRESHOLD_CALIBRATION` → correct implementation, suboptimal value → valid target
+     - `TIMING` → confirmation lag (e.g., ADX lagging) → quantify, flag severity
+     - `REGIME_BLINDNESS` → static parameter in dynamic market → valid target
+
+4. **File reads (conditional).**
+   - If `context` names a specific module → open at most 2 files directly relevant to it.
+   - If no `context` provided → operate from SYSTEM_MEMORY.md only (0 additional files).
+   - Before opening any file, state: which file, and which specific question it answers.
+
+5. **Adaptive Micro-Adjustment Generation.**
+   For each `THRESHOLD_CALIBRATION` or `REGIME_BLINDNESS` opportunity:
+   - Propose ONE minimal change: a single parameter adjustment OR a single added condition.
+   - **BLOCK and emit `STRATEGY_SCOPE_VIOLATION`** if the proposal:
+     - requires a new data source, new TAAPI indicator, or new N8N node
+     - touches more than 2 constants simultaneously
+     - has `complexity_delta` = MODERATE or HIGH
+     - If the idea has architectural merit → note: "Redirect to `/upgrade [description]`"
+   - For each approved proposal, fill all R/R asymmetry fields:
+     `impact_signal_frequency`, `impact_risk_exposure`, `profitability_gain_estimate`,
+     `conditions_effective`, `conditions_fail`.
+   - If the proposal touches `TIER_MIN_RR` in any node → flag R-04 SYNC REQUIRED.
+     Route to `/upgrade` + `/impact-analysis` (never to `/optimize`).
+
+6. **Run Quality Gate.**
+
+7. **Output `StrategicEdgeOutput` schema.**
+
+---
+
+**File access rule:**
+
+| Context provided | Max additional files |
+|-----------------|----------------------|
+| None (full pipeline review) | 0 |
+| Specific module named | 1 |
+| Module + downstream concern | 2 |
+
+Most valuable reads (if file access is warranted):
+- `row4/HARD FILTERS ENFORCER` — score floor logic, TIER_MIN_RR usage
+- `row4/SIGNAL RANKING & TOP 5 SELECTION` — Tier 3 avg−15 formula, Top-5 cap
+- `row3/SCORE AGGREGATOR` — weight composition, correction multipliers
+
+---
+
+**Relationship to other commands:**
+
+| Command | Domain | Key question answered |
+|---------|--------|----------------------|
+| `/strategic-edge` | **Strategy / Policy** | Where is the system losing profitable trades? |
+| `/optimize` | Code correctness | How do I fix this specific technical issue? |
+| `/upgrade` | Feature addition | How do I add this new capability safely? |
+| `/impact-analysis` | Risk quantification | How dangerous is this proposed change? |
+| `/debug` | Failure diagnosis | Why did this specific thing break? |
+| `/architecture-review` | Structural health | What is the current overall system state? |
+
+**Execution flow:**
+`/strategic-edge` generates proposals → each routes to `/optimize` (single-file, LOW/MEDIUM risk)
+or `/upgrade` (multi-file, HIGH risk) → HIGH-risk proposals require `/impact-analysis` first.
+
+---
+
+**Hard constraints:**
+- Minimum output: 3 premortem scenarios, 2 opportunity loss areas, ≥1 proposed adjustment.
+- Each proposed adjustment must be immediately actionable via a named command (`/optimize` or `/upgrade`).
+- Recommendation must be exactly one of: `IMPLEMENT` / `TEST_IN_SHADOW_MODE` / `REJECT`.
+- Default is `TEST_IN_SHADOW_MODE` for any proposal that touches a threshold used in live signal filtering.
+- `STRUCTURAL` opportunity loss areas (mapped to existing open issues) are listed as
+  reference only — they are NOT re-proposed as new adjustments.
+
+**Output schema:** `StrategicEdgeOutput` — see `schema.md`

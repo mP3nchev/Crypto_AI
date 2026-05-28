@@ -1,7 +1,7 @@
 ---
 name: crypto-memory-architect
-version: 1.0.0
-description: "Persistent memory and safe-change skill for mp3nchev/crypto_ai N8N signal pipeline (Binance Perpetual Futures, TAAPI.io, Supabase, Telegram). Always use when working on crypto_ai or any file in row1/, row2/, row3/, row4/, or when the session involves: SCORE AGGREGATOR, TREND SCORE CALCULATOR, HARD FILTERS ENFORCER, ASSET TIER CALCULATOR, GROUP CANDLE RESPONSES, TP-SL CALCULATOR, RISK-REWARD FILTER, Merge SQL node, Adaptive Weights Calculator1, Separation of Requests, Cooldown after Batch 6. Triggered by: 'change the tier', 'update scoring', 'modify filter', 'fix the candle', 'add indicator', 'change SL', 'update leverage', 'debug signal', 'wrong direction', 'TAAPI rate limit', '429', 'funding rate', 'scan_cycle_id', 'audit', 'fix plan', 'open issue'."
+version: 1.1.0
+description: "Persistent memory and safe-change skill for mp3nchev/crypto_ai N8N signal pipeline (Binance Perpetual Futures, TAAPI.io, Supabase, Telegram). Always use when working on crypto_ai or any file in row1/, row2/, row3/, row4/, or when the session involves: SCORE AGGREGATOR, TREND SCORE CALCULATOR, HARD FILTERS ENFORCER, ASSET TIER CALCULATOR, GROUP CANDLE RESPONSES, TP-SL CALCULATOR, RISK-REWARD FILTER, Merge SQL node, Adaptive Weights Calculator1, Separation of Requests, Cooldown after Batch 6. Triggered by: 'change the tier', 'update scoring', 'modify filter', 'fix the candle', 'add indicator', 'change SL', 'update leverage', 'debug signal', 'wrong direction', 'TAAPI rate limit', '429', 'funding rate', 'scan_cycle_id', 'audit', 'fix plan', 'open issue', 'too few signals', 'late entry', 'missed move', 'over-filtered', 'profitability', 'improve signals', 'missed trade', 'strategic edge'."
 platforms:
   - claude-code
 ---
@@ -36,8 +36,24 @@ than 7 days, Claude will prompt for `/init` or `/refresh-memory` before proceedi
 | `/architecture-review` | Summarize current state vs known failure zones. Reads memory only. |
 | `/refresh-memory` | Re-run `/init`. Overwrites SYSTEM_MEMORY.md. Use after significant repo changes. |
 | `/generate-skill` | Output updated version of this skill package reflecting current SYSTEM_MEMORY.md. |
+| `/strategic-edge [context?]` | Premortem profitability analysis. Detects over-filtering, late entries, and regime blindness. Produces minimal micro-adjustment proposals with risk/reward asymmetry scoring. |
 
 Full command logic: see `commands.md`
+
+---
+
+## Command Layer Diagram
+
+```
+Strategy layer:    /strategic-edge  →  identifies WHERE profit is being lost
+Change layer:      /optimize  /upgrade  (both gated by /impact-analysis)
+Diagnostic layer:  /debug  /root-cause  /architecture-review
+Memory layer:      /init  /refresh-memory  /generate-skill
+```
+
+`/strategic-edge` sits above the change layer. It answers "where is profitability
+being lost by policy, not bugs?" then routes each proposal to `/optimize` (single-file)
+or `/upgrade` (multi-file). It never implements directly.
 
 ---
 
