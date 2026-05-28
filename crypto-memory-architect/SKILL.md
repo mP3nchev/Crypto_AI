@@ -1,38 +1,7 @@
 ---
 name: crypto-memory-architect
 version: 1.0.0
-description: >
-  Persistent memory and safe-change architecture skill for the mp3nchev/crypto_ai
-  N8N signal pipeline (Binance Perpetual Futures, TAAPI.io, Supabase, Telegram).
-
-  Always use this skill when working on crypto_ai or any session involving:
-  - SCORE AGGREGATOR, TREND SCORE CALCULATOR, HARD FILTERS ENFORCER
-  - ASSET TIER CALCULATOR, GROUP CANDLE RESPONSES
-  - TP-SL CALCULATOR, RISK-REWARD FILTER, RISK-REWARD SCORE OUTPUT
-  - Merge (SQL node, Row 3 Part 2), Adaptive Weights Calculator1
-  - TAAPI bulk batch processing, Separation of Requests, Cooldown after Batch 6
-  - Any change to scoring weights, tier boundaries (1-5 / 6-15 / 16-20), or R/R thresholds
-  - Any change to SL multipliers, leverage caps, or fee calculations
-  - Any file in row1/, row2/, row3/, or row4/
-  - Supabase table schema (crypto_symbols, raw_candles_data, asset_tiers, scan_results, signals_log)
-  - Audit report updates, fix plan reviews, post-PR verification
-
-  Triggered by phrases:
-  - "change the tier" / "update tier boundaries"
-  - "update the scoring" / "change score weights" / "modify weights"
-  - "modify the filter" / "change the threshold" / "update R/R"
-  - "fix the candle" / "candle processing" / "Binance fetch"
-  - "add indicator" / "new TAAPI field" / "MACD" / "RSI" / "ATR"
-  - "change the SL" / "stop loss" / "take profit" / "TP levels"
-  - "update leverage" / "leverage cap" / "recommended leverage"
-  - "what's broken" / "debug signal" / "why is the score"
-  - "why is the signal" / "false signal" / "wrong direction"
-  - "TAAPI rate limit" / "429" / "batch cooldown"
-  - "funding rate" / "perpetual" / "fee-adjusted"
-  - "scan_cycle_id" / "cycle propagation"
-  - "Supabase insert" / "signals_log" / "asset_tiers"
-  - "audit" / "fix plan" / "open issue" / "remaining issue"
-
+description: "Persistent memory and safe-change skill for mp3nchev/crypto_ai N8N signal pipeline (Binance Perpetual Futures, TAAPI.io, Supabase, Telegram). Always use when working on crypto_ai or any file in row1/, row2/, row3/, row4/, or when the session involves: SCORE AGGREGATOR, TREND SCORE CALCULATOR, HARD FILTERS ENFORCER, ASSET TIER CALCULATOR, GROUP CANDLE RESPONSES, TP-SL CALCULATOR, RISK-REWARD FILTER, Merge SQL node, Adaptive Weights Calculator1, Separation of Requests, Cooldown after Batch 6. Triggered by: 'change the tier', 'update scoring', 'modify filter', 'fix the candle', 'add indicator', 'change SL', 'update leverage', 'debug signal', 'wrong direction', 'TAAPI rate limit', '429', 'funding rate', 'scan_cycle_id', 'audit', 'fix plan', 'open issue'."
 platforms:
   - claude-code
 ---
