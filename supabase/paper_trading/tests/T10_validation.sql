@@ -1,7 +1,7 @@
 -- =====================================================================
 -- T10_validation — invalid levels, allocation, stale
 -- Spec: P-08 steps 2-3. Run in a TEST project/branch only (see tests/README.md).
--- Prerequisites: 001, 002, 003. Ends with ROLLBACK; aborts on any mismatch.
+-- Prerequisites: 001, 002, 003 (incl. Part 4). Ends with ROLLBACK; aborts on any mismatch.
 -- =====================================================================
 BEGIN;
 
@@ -9,6 +9,8 @@ BEGIN;
 -- Clean slate inside this transaction (ROLLBACK at the end restores everything).
 DELETE FROM public.paper_position_events;
 DELETE FROM public.paper_positions;
+DELETE FROM public.paper_candles;
+DELETE FROM public.paper_monitor_runs;
 DELETE FROM public.paper_config;
 INSERT INTO public.paper_config (id) VALUES (1);   -- spec defaults
 
@@ -40,6 +42,34 @@ BEGIN
   IF NOT FOUND THEN RAISE EXCEPTION 'no paper position for signal %', v_id; END IF;
   RETURN r;
 END $f$;
+
+-- insert one closed 1h candle (close_time = open + 1h - 1ms, like Binance)
+CREATE OR REPLACE FUNCTION pg_temp.candle(p_symbol text, p_open timestamptz,
+  o numeric, h numeric, l numeric, c numeric) RETURNS void LANGUAGE sql AS $f$
+  INSERT INTO public.paper_candles (symbol, open_time, close_time, open, high, low, close, volume)
+  VALUES (p_symbol, p_open, p_open + interval '1 hour' - interval '1 millisecond', o, h, l, c, 1);
+$f$;
+
+-- reload a position
+CREATE OR REPLACE FUNCTION pg_temp.pos(p_id bigint) RETURNS public.paper_positions
+LANGUAGE sql AS $f$ SELECT * FROM public.paper_positions WHERE id = p_id $f$;
+
+-- one event of a position by type
+CREATE OR REPLACE FUNCTION pg_temp.ev(p_id bigint, p_type text) RETURNS public.paper_position_events
+LANGUAGE sql AS $f$
+  SELECT * FROM public.paper_position_events WHERE position_id = p_id AND event_type = p_type
+$f$;
+
+-- number of exit (fill) events of a position
+CREATE OR REPLACE FUNCTION pg_temp.exits(p_id bigint) RETURNS bigint LANGUAGE sql AS $f$
+  SELECT count(*) FROM public.paper_position_events
+   WHERE position_id = p_id
+     AND event_type IN ('TP1','TP2','TP3','SL','BREAKEVEN_SL','TIMEOUT','LIQUIDATION','DATA_UNAVAILABLE')
+$f$;
+
+-- |a - b| <= tol (default 0.01 $)
+CREATE OR REPLACE FUNCTION pg_temp.near(a numeric, b numeric, tol numeric DEFAULT 0.01)
+RETURNS boolean LANGUAGE sql AS $f$ SELECT abs(a - b) <= tol $f$;
 -- ---------------------------------------------------------------------------
 
 DO $$

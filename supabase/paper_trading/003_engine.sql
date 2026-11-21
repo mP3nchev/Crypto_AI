@@ -351,3 +351,522 @@ BEGIN
     EXECUTE 'REVOKE ALL ON FUNCTION public.paper_on_signal_insert() FROM authenticated';
   END IF;
 END $$;
+
+
+-- #####################################################################
+-- PART 4 — MONITORING AND EXIT SIMULATION          [P-12 P-13 P-14 P-15]
+-- #####################################################################
+
+-- ---------------------------------------------------------------------
+-- P-12  paper_get_monitor_targets()
+-- One entry per symbol with an OPEN position; start = earliest candle the
+-- evaluator still needs. Returned as ONE json object so the N8N IF node
+-- always receives exactly one item:  {"count": n, "targets": [{symbol, start_time_ms}]}
+-- ---------------------------------------------------------------------
+CREATE OR REPLACE FUNCTION public.paper_get_monitor_targets()
+RETURNS jsonb
+LANGUAGE sql
+STABLE
+SECURITY DEFINER
+SET search_path = public, pg_temp
+AS $$
+  SELECT jsonb_build_object(
+           'count',   count(*),
+           'targets', coalesce(jsonb_agg(jsonb_build_object('symbol', symbol,
+                                                            'start_time_ms', start_ms)
+                                         ORDER BY symbol), '[]'::jsonb))
+    FROM (SELECT symbol,
+                 (extract(epoch FROM min(greatest(eval_start_open_time,
+                                                  coalesce(last_evaluated_open_time + interval '1 hour',
+                                                           eval_start_open_time)))) * 1000)::bigint AS start_ms
+            FROM public.paper_positions
+           WHERE status = 'OPEN'
+           GROUP BY symbol) t;
+$$;
+
+-- ---------------------------------------------------------------------
+-- P-13  paper_ingest_candles(p_candles)
+-- Upsert of closed 1h candles by (symbol, open_time). Invalid or not-yet-
+-- closed candles are dropped (defence in depth; the normalizer drops them too).
+-- Input: [{symbol, open_time, close_time, open, high, low, close, volume}]
+--        timestamps ISO-8601, prices as numbers or numeric strings.
+-- ---------------------------------------------------------------------
+CREATE OR REPLACE FUNCTION public.paper_ingest_candles(p_candles jsonb)
+RETURNS jsonb
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public, pg_temp
+AS $$
+DECLARE
+  v_received integer;
+  v_valid    integer;
+  v_inserted integer;
+  v_updated  integer;
+BEGIN
+  IF p_candles IS NULL OR jsonb_typeof(p_candles) <> 'array' THEN
+    RETURN jsonb_build_object('received', 0, 'valid', 0, 'inserted', 0, 'updated', 0,
+                              'error', 'p_candles must be a json array');
+  END IF;
+
+  CREATE TEMP TABLE IF NOT EXISTS _paper_ingest (LIKE public.paper_candles) ON COMMIT DROP;
+  TRUNCATE _paper_ingest;
+
+  INSERT INTO _paper_ingest (symbol, open_time, close_time, open, high, low, close, volume, ingested_at)
+  SELECT DISTINCT ON (upper(x.symbol), x.open_time)
+         upper(x.symbol), x.open_time, x.close_time, x.open, x.high, x.low, x.close, x.volume, now()
+    FROM jsonb_to_recordset(p_candles) AS x(symbol text, open_time timestamptz, close_time timestamptz,
+                                            open numeric, high numeric, low numeric, close numeric,
+                                            volume numeric)
+   WHERE x.symbol IS NOT NULL AND x.open_time IS NOT NULL AND x.close_time IS NOT NULL
+     AND x.close_time > x.open_time
+     AND x.close_time < now()                       -- closed candles only
+     AND x.low > 0 AND x.high >= x.low
+     AND x.open  BETWEEN x.low AND x.high
+     AND x.close BETWEEN x.low AND x.high
+   ORDER BY upper(x.symbol), x.open_time;
+
+  v_received := jsonb_array_length(p_candles);
+  SELECT count(*) INTO v_valid FROM _paper_ingest;
+
+  WITH up AS (
+    INSERT INTO public.paper_candles AS pc
+           (symbol, open_time, close_time, open, high, low, close, volume, ingested_at)
+    SELECT symbol, open_time, close_time, open, high, low, close, volume, ingested_at FROM _paper_ingest
+    ON CONFLICT (symbol, open_time) DO UPDATE
+       SET close_time = EXCLUDED.close_time, open = EXCLUDED.open, high = EXCLUDED.high,
+           low = EXCLUDED.low, close = EXCLUDED.close, volume = EXCLUDED.volume,
+           ingested_at = EXCLUDED.ingested_at
+     WHERE (pc.close_time, pc.open, pc.high, pc.low, pc.close, pc.volume)
+           IS DISTINCT FROM
+           (EXCLUDED.close_time, EXCLUDED.open, EXCLUDED.high, EXCLUDED.low, EXCLUDED.close, EXCLUDED.volume)
+    RETURNING (xmax = 0) AS was_insert)
+  SELECT count(*) FILTER (WHERE was_insert), count(*) FILTER (WHERE NOT was_insert)
+    INTO v_inserted, v_updated FROM up;
+
+  RETURN jsonb_build_object('received', v_received, 'valid', v_valid,
+                            'inserted', v_inserted, 'updated', v_updated);
+END $$;
+
+-- ---------------------------------------------------------------------
+-- P-15  exit amounts for one tranche / remainder
+-- gross: LONG q*(exit-entry), SHORT q*(entry-exit)
+-- fees : q*entry*F + q*exit*F   (entry fee charged proportionally per exit)
+-- ---------------------------------------------------------------------
+CREATE OR REPLACE FUNCTION public.paper_exit_amounts(
+  p_direction text, p_qty numeric, p_entry_fill numeric, p_exit_fill numeric, p_fee_rate numeric,
+  OUT gross numeric, OUT fees numeric, OUT net numeric)
+LANGUAGE sql
+IMMUTABLE
+AS $$
+  SELECT g, f, g - f
+    FROM (SELECT CASE WHEN p_direction = 'LONG' THEN p_qty * (p_exit_fill - p_entry_fill)
+                      ELSE p_qty * (p_entry_fill - p_exit_fill) END AS g,
+                 p_qty * p_entry_fill * p_fee_rate + p_qty * p_exit_fill * p_fee_rate AS f) t;
+$$;
+
+-- Lock wrapper: a separate function so T15 can simulate a held lock.
+CREATE OR REPLACE FUNCTION public.paper_try_monitor_lock()
+RETURNS boolean
+LANGUAGE sql
+VOLATILE
+AS $$ SELECT pg_try_advisory_xact_lock(7272002); $$;
+
+-- ---------------------------------------------------------------------
+-- P-14  paper_evaluate_positions()
+-- Deterministic exit simulation on CLOSED 1h candles with a per-position
+-- cursor. Re-running never changes results (T11); missed hours are caught
+-- up in one run (T14); a concurrent run backs off (T15).
+--
+-- Costs and rules come from the position's config_snapshot (frozen at open),
+-- so a later config change never rewrites already-open positions.
+--
+-- p_now            : evaluation clock (default now()); tests only.
+-- p_failed_symbols : symbols whose Binance fetch failed in this monitor run
+--                    (from PAPER CANDLE NORMALIZER) -> run status PARTIAL.
+-- ---------------------------------------------------------------------
+CREATE OR REPLACE FUNCTION public.paper_evaluate_positions(
+  p_now            timestamptz DEFAULT now(),
+  p_failed_symbols text[]      DEFAULT NULL)
+RETURNS jsonb
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public, pg_temp
+AS $$
+DECLARE
+  cfg          public.paper_config%ROWTYPE;
+  pos          public.paper_positions%ROWTYPE;
+  c            public.paper_candles%ROWTYPE;
+  v_started    timestamptz := clock_timestamp();
+  v_status     text := 'OK';
+  v_errors     text[] := '{}';
+  v_evaluated  integer := 0;
+  v_candles    integer := 0;
+  v_events_n   integer := 0;
+  v_closed_n   integer := 0;
+  v_events     jsonb := '[]'::jsonb;
+  v_run_id     bigint;
+  v_msg        text;
+
+  -- per position
+  snap         jsonb;
+  v_fee        numeric;
+  v_s_x        numeric;   -- adverse stop / timeout slippage (fraction)
+  v_s_tp       numeric;   -- tp slippage (fraction)
+  v_hold       interval;
+  v_be_rule    boolean;
+  v_rem        numeric;
+  v_hits       integer;
+  v_be         boolean;
+  v_gross      numeric;
+  v_fees       numeric;
+  v_net        numeric;
+  v_summary    text;
+  v_cursor     timestamptz;
+  v_prev       timestamptz;
+  v_gap        boolean;
+  v_closed     boolean;
+  v_reason     text;
+  v_closed_at  timestamptz;
+  v_stop       numeric;
+  v_level      numeric;
+  v_fill       numeric;
+  v_pct        numeric;
+  v_qty        numeric;
+  v_gap_thru   boolean;
+  v_tp1_now    boolean;
+  v_last_close numeric;
+  a            record;
+BEGIN
+  -- ---- concurrency guard ------------------------------------------------
+  IF NOT public.paper_try_monitor_lock() THEN
+    INSERT INTO public.paper_monitor_runs (started_at, finished_at, status)
+    VALUES (v_started, clock_timestamp(), 'SKIPPED_LOCKED')
+    RETURNING id INTO v_run_id;
+    RETURN jsonb_build_object('status', 'SKIPPED_LOCKED', 'run_id', v_run_id,
+                              'evaluated', 0, 'candles_used', 0, 'closed', 0,
+                              'events', '[]'::jsonb, 'notify_telegram_on_exit', false);
+  END IF;
+
+  BEGIN  -- whole-run guard: a failure is recorded as an ERROR run, never raised to N8N
+    SELECT * INTO cfg FROM public.paper_config WHERE id = 1;
+
+    FOR pos IN
+      SELECT * FROM public.paper_positions
+       WHERE status = 'OPEN'
+       ORDER BY opened_at, id
+         FOR UPDATE
+    LOOP
+      v_evaluated := v_evaluated + 1;
+
+      BEGIN  -- per-position guard: one broken position does not stop the others
+        snap      := coalesce(pos.config_snapshot, to_jsonb(cfg));
+        v_fee     := (snap ->> 'fee_rate')::numeric;
+        v_s_x     := (snap -> 'stop_slippage_pct' ->> pos.tier::text)::numeric / 100;
+        v_s_tp    := coalesce((snap ->> 'tp_slippage_pct')::numeric, 0) / 100;
+        v_hold    := make_interval(hours => (snap ->> 'max_holding_hours')::int);
+        v_be_rule := coalesce((snap ->> 'move_sl_to_breakeven_after_tp1')::boolean, false);
+        IF v_fee IS NULL OR v_s_x IS NULL OR v_hold IS NULL THEN
+          RAISE EXCEPTION 'config_snapshot incomplete for position % (fee/slippage/holding)', pos.id;
+        END IF;
+
+        v_rem       := pos.remaining_pct;
+        v_hits      := pos.tp_hits;
+        v_be        := pos.be_active;
+        v_gross     := pos.realized_gross_usd;
+        v_fees      := pos.fees_usd;
+        v_net       := pos.realized_net_usd;
+        v_summary   := pos.exit_summary;
+        v_cursor    := pos.last_evaluated_open_time;
+        v_gap       := pos.has_data_gap;
+        v_closed    := false;
+        v_reason    := NULL;
+        v_closed_at := NULL;
+        -- expected open_time of the next candle = cursor + 1h (or eval start)
+        v_prev      := coalesce(v_cursor, pos.eval_start_open_time - interval '1 hour');
+
+        FOR c IN
+          SELECT * FROM public.paper_candles
+           WHERE symbol = pos.symbol
+             AND open_time >= pos.eval_start_open_time
+             AND open_time > coalesce(v_cursor, '-infinity'::timestamptz)
+             AND close_time < p_now
+           ORDER BY open_time
+        LOOP
+          v_candles := v_candles + 1;
+          v_tp1_now := false;
+
+          -- 1. data gap (recorded once per position; processing continues)
+          IF c.open_time - v_prev > interval '1 hour' THEN
+            v_gap := true;
+            INSERT INTO public.paper_position_events
+              (position_id, event_type, candle_open_time, details)
+            VALUES (pos.id, 'DATA_GAP', c.open_time,
+                    jsonb_build_object('expected_open_time', v_prev + interval '1 hour',
+                                       'actual_open_time', c.open_time,
+                                       'missing_hours',
+                                       extract(epoch FROM (c.open_time - v_prev)) / 3600 - 1))
+            ON CONFLICT DO NOTHING;
+            IF FOUND THEN v_events_n := v_events_n + 1; END IF;
+          END IF;
+          v_prev := c.open_time;
+
+          -- 2. active stop (break-even only from the candle AFTER activation)
+          IF v_be THEN
+            v_stop := CASE WHEN pos.direction = 'LONG'
+                           THEN greatest(pos.effective_stop, pos.entry_fill_price)
+                           ELSE least(pos.effective_stop, pos.entry_fill_price) END;
+          ELSE
+            v_stop := pos.effective_stop;
+          END IF;
+
+          -- 3./4. stop touched -> priority over any TP in the same candle
+          IF (pos.direction = 'LONG'  AND c.low  <= v_stop)
+          OR (pos.direction = 'SHORT' AND c.high >= v_stop) THEN
+            v_gap_thru := (pos.direction = 'LONG'  AND c.open <= v_stop)
+                       OR (pos.direction = 'SHORT' AND c.open >= v_stop);
+            v_fill := CASE WHEN v_gap_thru THEN c.open ELSE v_stop END;
+            v_fill := CASE WHEN pos.direction = 'LONG' THEN v_fill * (1 - v_s_x)
+                           ELSE v_fill * (1 + v_s_x) END;
+            v_reason := CASE
+              WHEN pos.stop_capped_by_liquidation AND v_stop = pos.liquidation_price THEN 'LIQUIDATION'
+              WHEN v_be THEN 'BREAKEVEN_SL'
+              ELSE 'SL' END;
+            v_pct := v_rem;
+            v_qty := pos.quantity * v_pct / 100;
+            SELECT * INTO a FROM public.paper_exit_amounts(pos.direction, v_qty, pos.entry_fill_price,
+                                                           v_fill, v_fee);
+            IF v_reason = 'LIQUIDATION' THEN
+              -- the whole margin of this share is lost; fees are inside the loss
+              a.net   := -(pos.margin_usd * v_pct / 100);
+              a.gross := a.net + a.fees;
+            END IF;
+
+            INSERT INTO public.paper_position_events
+              (position_id, event_type, tranche, candle_open_time, level_price, fill_price,
+               qty, pct_of_position, gross_usd, fees_usd, net_usd, details)
+            VALUES (pos.id, v_reason, NULL, c.open_time, v_stop, v_fill,
+                    v_qty, v_pct, a.gross, a.fees, a.net,
+                    jsonb_build_object('gap_through', v_gap_thru, 'slippage_pct', v_s_x * 100,
+                                       'candle', jsonb_build_object('o', c.open, 'h', c.high,
+                                                                    'l', c.low, 'c', c.close)));
+            v_events_n := v_events_n + 1;
+            v_events := v_events || jsonb_build_object(
+              'position_id', pos.id, 'symbol', pos.symbol, 'direction', pos.direction,
+              'event_type', v_reason, 'fill_price', v_fill, 'net_usd', a.net,
+              'candle_open_time', c.open_time);
+
+            v_gross := v_gross + a.gross; v_fees := v_fees + a.fees; v_net := v_net + a.net;
+            v_rem := 0;
+            v_summary := concat_ws('+', v_summary, v_reason);
+            v_closed := true; v_closed_at := c.close_time;
+            v_cursor := c.open_time;
+            EXIT;  -- candle processing stops
+          END IF;
+
+          -- 5. TP levels in order (only unfilled ones; stop at first unfilled)
+          WHILE v_hits < 3 AND v_rem > 0 LOOP
+            v_level := CASE v_hits WHEN 0 THEN pos.tp1 WHEN 1 THEN pos.tp2 ELSE pos.tp3 END;
+            EXIT WHEN NOT ((pos.direction = 'LONG'  AND c.high >= v_level)
+                        OR (pos.direction = 'SHORT' AND c.low  <= v_level));
+            v_hits := v_hits + 1;
+            -- TP3 closes the whole remainder (absorbs the +/-0.5 allocation tolerance)
+            v_pct := CASE WHEN v_hits = 3 THEN v_rem
+                          ELSE least(v_rem, CASE v_hits WHEN 1 THEN pos.alloc1 ELSE pos.alloc2 END) END;
+            v_qty := pos.quantity * v_pct / 100;
+            -- limit order: never better than the level, even on a gap
+            v_fill := CASE WHEN pos.direction = 'LONG' THEN v_level * (1 - v_s_tp)
+                           ELSE v_level * (1 + v_s_tp) END;
+            SELECT * INTO a FROM public.paper_exit_amounts(pos.direction, v_qty, pos.entry_fill_price,
+                                                           v_fill, v_fee);
+            INSERT INTO public.paper_position_events
+              (position_id, event_type, tranche, candle_open_time, level_price, fill_price,
+               qty, pct_of_position, gross_usd, fees_usd, net_usd, details)
+            VALUES (pos.id, 'TP' || v_hits, v_hits, c.open_time, v_level, v_fill,
+                    v_qty, v_pct, a.gross, a.fees, a.net,
+                    jsonb_build_object('candle', jsonb_build_object('o', c.open, 'h', c.high,
+                                                                    'l', c.low, 'c', c.close)));
+            v_events_n := v_events_n + 1;
+            v_events := v_events || jsonb_build_object(
+              'position_id', pos.id, 'symbol', pos.symbol, 'direction', pos.direction,
+              'event_type', 'TP' || v_hits, 'fill_price', v_fill, 'net_usd', a.net,
+              'candle_open_time', c.open_time);
+            v_gross := v_gross + a.gross; v_fees := v_fees + a.fees; v_net := v_net + a.net;
+            v_rem := v_rem - v_pct;
+            v_summary := concat_ws('+', v_summary, 'TP' || v_hits);
+            IF v_hits = 1 THEN v_tp1_now := true; END IF;
+          END LOOP;
+
+          -- 7. full close by take-profits
+          IF v_rem <= 0 THEN
+            v_rem := 0;
+            v_reason := 'TP' || v_hits;   -- TP3 with normal allocations
+            v_closed := true; v_closed_at := c.close_time;
+            v_cursor := c.open_time;
+            EXIT;
+          END IF;
+
+          -- 6. break-even activation (effective from the next candle)
+          IF v_be_rule AND v_tp1_now AND NOT v_be THEN
+            v_be := true;
+            INSERT INTO public.paper_position_events
+              (position_id, event_type, candle_open_time, level_price, details)
+            VALUES (pos.id, 'BE_ACTIVATED', c.open_time, pos.entry_fill_price,
+                    jsonb_build_object('effective_from', c.open_time + interval '1 hour'));
+            v_events_n := v_events_n + 1;
+          END IF;
+
+          -- 8. time exit
+          IF c.close_time >= pos.opened_at + v_hold THEN
+            v_fill := CASE WHEN pos.direction = 'LONG' THEN c.close * (1 - v_s_x)
+                           ELSE c.close * (1 + v_s_x) END;
+            v_pct := v_rem;
+            v_qty := pos.quantity * v_pct / 100;
+            SELECT * INTO a FROM public.paper_exit_amounts(pos.direction, v_qty, pos.entry_fill_price,
+                                                           v_fill, v_fee);
+            INSERT INTO public.paper_position_events
+              (position_id, event_type, tranche, candle_open_time, level_price, fill_price,
+               qty, pct_of_position, gross_usd, fees_usd, net_usd, details)
+            VALUES (pos.id, 'TIMEOUT', NULL, c.open_time, c.close, v_fill,
+                    v_qty, v_pct, a.gross, a.fees, a.net,
+                    jsonb_build_object('max_holding_hours', (snap ->> 'max_holding_hours')::int,
+                                       'slippage_pct', v_s_x * 100));
+            v_events_n := v_events_n + 1;
+            v_events := v_events || jsonb_build_object(
+              'position_id', pos.id, 'symbol', pos.symbol, 'direction', pos.direction,
+              'event_type', 'TIMEOUT', 'fill_price', v_fill, 'net_usd', a.net,
+              'candle_open_time', c.open_time);
+            v_gross := v_gross + a.gross; v_fees := v_fees + a.fees; v_net := v_net + a.net;
+            v_rem := 0;
+            v_summary := concat_ws('+', v_summary, 'TIMEOUT');
+            v_reason := 'TIMEOUT';
+            v_closed := true; v_closed_at := c.close_time;
+            v_cursor := c.open_time;
+            EXIT;
+          END IF;
+
+          -- 9. advance the cursor
+          v_cursor := c.open_time;
+        END LOOP;
+
+        -- after the candles: no data at all long after the holding period
+        IF NOT v_closed
+           AND p_now - pos.opened_at > v_hold + interval '24 hours'
+           AND NOT EXISTS (SELECT 1 FROM public.paper_candles
+                            WHERE symbol = pos.symbol AND open_time >= pos.eval_start_open_time) THEN
+          SELECT close INTO v_last_close FROM public.paper_candles
+           WHERE symbol = pos.symbol ORDER BY open_time DESC LIMIT 1;
+          v_level := coalesce(v_last_close, pos.entry_fill_price);
+          v_fill  := CASE WHEN pos.direction = 'LONG' THEN v_level * (1 - v_s_x)
+                          ELSE v_level * (1 + v_s_x) END;
+          v_pct := v_rem;
+          v_qty := pos.quantity * v_pct / 100;
+          SELECT * INTO a FROM public.paper_exit_amounts(pos.direction, v_qty, pos.entry_fill_price,
+                                                         v_fill, v_fee);
+          INSERT INTO public.paper_position_events
+            (position_id, event_type, tranche, candle_open_time, level_price, fill_price,
+             qty, pct_of_position, gross_usd, fees_usd, net_usd, details)
+          VALUES (pos.id, 'DATA_UNAVAILABLE', NULL, NULL, v_level, v_fill,
+                  v_qty, v_pct, a.gross, a.fees, a.net,
+                  jsonb_build_object('price_source',
+                                     CASE WHEN v_last_close IS NULL THEN 'entry_fill' ELSE 'last_known_close' END));
+          v_events_n := v_events_n + 1;
+          v_events := v_events || jsonb_build_object(
+            'position_id', pos.id, 'symbol', pos.symbol, 'direction', pos.direction,
+            'event_type', 'DATA_UNAVAILABLE', 'fill_price', v_fill, 'net_usd', a.net,
+            'candle_open_time', NULL);
+          v_gross := v_gross + a.gross; v_fees := v_fees + a.fees; v_net := v_net + a.net;
+          v_rem := 0;
+          v_summary := concat_ws('+', v_summary, 'DATA_UNAVAILABLE');
+          v_reason := 'DATA_UNAVAILABLE';
+          v_closed := true; v_closed_at := p_now;
+        END IF;
+
+        UPDATE public.paper_positions
+           SET remaining_pct            = v_rem,
+               tp_hits                  = v_hits,
+               be_active                = v_be,
+               realized_gross_usd       = v_gross,
+               fees_usd                 = v_fees,
+               realized_net_usd         = v_net,
+               return_on_margin_pct     = CASE WHEN margin_usd > 0 THEN v_net / margin_usd * 100 END,
+               exit_summary             = v_summary,
+               last_evaluated_open_time = v_cursor,
+               has_data_gap             = v_gap,
+               status                   = CASE WHEN v_closed THEN 'CLOSED' ELSE 'OPEN' END,
+               exit_reason              = CASE WHEN v_closed THEN v_reason END,
+               closed_at                = CASE WHEN v_closed THEN v_closed_at END,
+               duration_hours           = CASE WHEN v_closed
+                                               THEN extract(epoch FROM (v_closed_at - opened_at)) / 3600 END
+         WHERE id = pos.id;
+
+        IF v_closed THEN v_closed_n := v_closed_n + 1; END IF;
+
+      EXCEPTION WHEN OTHERS THEN
+        GET STACKED DIAGNOSTICS v_msg = MESSAGE_TEXT;
+        v_status := 'PARTIAL';
+        v_errors := v_errors || format('position %s (%s): %s', pos.id, pos.symbol, v_msg);
+        INSERT INTO public.paper_position_events (position_id, event_type, details)
+        VALUES (pos.id, 'ERROR', jsonb_build_object('stage', 'evaluate', 'message', v_msg,
+                                                     'at', clock_timestamp()))
+        ON CONFLICT (position_id, event_type, (coalesce(tranche, 0)))
+        DO UPDATE SET details = EXCLUDED.details, created_at = now();
+      END;
+    END LOOP;
+
+    IF coalesce(cardinality(p_failed_symbols), 0) > 0 THEN
+      v_status := 'PARTIAL';
+      v_errors := v_errors || ('binance fetch failed: ' || array_to_string(p_failed_symbols, ', '));
+    END IF;
+
+  EXCEPTION WHEN OTHERS THEN
+    GET STACKED DIAGNOSTICS v_msg = MESSAGE_TEXT;
+    v_status := 'ERROR';
+    v_errors := v_errors || v_msg;
+    v_evaluated := 0; v_candles := 0; v_events_n := 0; v_closed_n := 0; v_events := '[]'::jsonb;
+  END;
+
+  INSERT INTO public.paper_monitor_runs
+    (started_at, finished_at, status, positions_evaluated, candles_used,
+     events_created, positions_closed, error)
+  VALUES (v_started, clock_timestamp(), v_status, v_evaluated, v_candles,
+          v_events_n, v_closed_n, nullif(array_to_string(v_errors, ' | '), ''))
+  RETURNING id INTO v_run_id;
+
+  RETURN jsonb_build_object(
+    'status', v_status, 'run_id', v_run_id,
+    'evaluated', v_evaluated, 'candles_used', v_candles,
+    'events_created', v_events_n, 'closed', v_closed_n,
+    'events', v_events,
+    'notify_telegram_on_exit', coalesce(cfg.notify_telegram_on_exit, false),
+    'errors', to_jsonb(v_errors));
+END $$;
+
+-- ---------------------------------------------------------------------
+-- Privileges for Part 4: service_role only (N8N). 005_security.sql repeats this.
+-- ---------------------------------------------------------------------
+REVOKE ALL ON FUNCTION public.paper_get_monitor_targets()                       FROM PUBLIC;
+REVOKE ALL ON FUNCTION public.paper_ingest_candles(jsonb)                       FROM PUBLIC;
+REVOKE ALL ON FUNCTION public.paper_evaluate_positions(timestamptz, text[])     FROM PUBLIC;
+REVOKE ALL ON FUNCTION public.paper_try_monitor_lock()                          FROM PUBLIC;
+
+DO $$
+DECLARE
+  r text;
+  f text;
+BEGIN
+  FOREACH r IN ARRAY ARRAY['anon', 'authenticated'] LOOP
+    IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = r) THEN
+      FOREACH f IN ARRAY ARRAY['public.paper_get_monitor_targets()',
+                               'public.paper_ingest_candles(jsonb)',
+                               'public.paper_evaluate_positions(timestamptz, text[])',
+                               'public.paper_try_monitor_lock()'] LOOP
+        EXECUTE format('REVOKE ALL ON FUNCTION %s FROM %I', f, r);
+      END LOOP;
+    END IF;
+  END LOOP;
+  IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'service_role') THEN
+    GRANT EXECUTE ON FUNCTION public.paper_get_monitor_targets()                   TO service_role;
+    GRANT EXECUTE ON FUNCTION public.paper_ingest_candles(jsonb)                   TO service_role;
+    GRANT EXECUTE ON FUNCTION public.paper_evaluate_positions(timestamptz, text[]) TO service_role;
+  END IF;
+END $$;

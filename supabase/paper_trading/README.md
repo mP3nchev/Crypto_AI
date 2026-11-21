@@ -10,7 +10,7 @@ Supabase (PL/pgSQL); N8N only moves data and the dashboard only displays it.
 | 0 | Back up / export `telegram_signals` | P-29 | user |
 | 1 | `001_schema.sql` | P-02 | **ready** |
 | 2 | `002_signal_ingest.sql` | P-04 | **ready** |
-| 3 | `003_engine.sql` | P-08 … P-11 ready; P-12 … P-15, P-21 appended in Part 4 | **ready (Part 3)** |
+| 3 | `003_engine.sql` | P-08 … P-15 (P-21 recompute is added in Part 5) | **ready (Parts 3–4)** |
 | 4 | `004_analytics.sql` | P-17 … P-20, P-28 | planned (Part 5) |
 | 5 | `005_security.sql` | P-23 | planned (Part 6) |
 
@@ -122,6 +122,39 @@ select status, status_reason, count(*) from paper_positions group by 1,2 order b
 **Legacy signals:** rows already in `telegram_signals` before 003 do **not** get a
 position (the trigger fires only on new inserts, and opening them now would be
 look-ahead). Daily 1:1 checks therefore count only signals after the deployment.
+
+## Part 4 — Monitoring and exit simulation: deployment (U)
+
+1. **Supabase:** re-run `003_engine.sql` (it is idempotent; the Part 4 section adds
+   `paper_get_monitor_targets`, `paper_ingest_candles`, `paper_evaluate_positions`).
+2. **N8N:** create the new workflow **PAPER MONITOR** exactly as described in
+   `monitor/PAPER MONITOR — N8N CONFIG`; paste `monitor/PAPER CANDLE NORMALIZER`
+   into its Code node. Run it manually once (checks in section 11 of that file), then activate.
+3. Optional exit messages: `update paper_config set notify_telegram_on_exit = true where id = 1;`
+
+### Exit rules (P-14), in short
+- Only **closed** 1h candles, from the first full hour after the signal, in time order.
+  A per-position cursor (`last_evaluated_open_time`) makes every run idempotent and lets
+  one run catch up any number of missed hours.
+- **Stop first:** if a candle touches the stop, it wins over any TP in the same candle.
+  Gap through the stop → fill at the candle open. Adverse slippage by tier.
+- **TPs** fill at the level (never better), several per candle allowed, in order.
+  TP3 closes the whole remainder.
+- **Break-even** (if enabled) is armed in the TP1 candle and active from the next one.
+- **TIMEOUT** at the close of the candle in which `max_holding_hours` elapse.
+- **LIQUIDATION** when the stop was capped by the liquidation price: that share's margin is lost.
+- **DATA_UNAVAILABLE** after `max_holding_hours + 24h` with no candle at all.
+- Costs/rules are taken from the position's `config_snapshot` (config at open time).
+
+### Daily checks
+```sql
+select status, count(*), max(started_at) from paper_monitor_runs
+ where started_at > now() - interval '24 hours' group by 1;            -- mostly OK
+select * from paper_monitor_runs where status <> 'OK' order by id desc limit 10;
+select id, symbol, last_evaluated_open_time from paper_positions
+ where status = 'OPEN' and coalesce(last_evaluated_open_time, eval_start_open_time)
+       < now() - interval '3 hours';                                   -- should be empty
+```
 
 ## Configuration
 
