@@ -1,0 +1,19 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* From the provided design */
+body {
+  background-color: #0B0E14;
+  color: #E2E8F0;
+  font-family: 'Inter', sans-serif;
+  overflow-x: hidden;
+}
+::-webkit-scrollbar { width: 6px; height: 6px; }
+::-webkit-scrollbar-track { background: #0B0E14; }
+::-webkit-scrollbar-thumb { background: #232A3B; border-radius: 9999px; }
+::-webkit-scrollbar-thumb:hover { background: #334155; }
+.tabular-nums { font-variant-numeric: tabular-nums; }
+nav::-webkit-scrollbar { display: none; }
+nav { scrollbar-width: none; }
+:focus-visible { outline: 2px solid #2979FF; outline-offset: 2px; }
