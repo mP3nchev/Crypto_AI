@@ -1,84 +1,111 @@
 // =====================================================
-// N8N NODE: Supabase Signal Insert
-// Тип:      HTTP Request
-// Позиция:  след SIGNAL LOGGER, преди Loop Over Items
+// N8N NODES: "Has Signals?" (IF) + "Supabase Signal Insert" (HTTP Request)
+// Position: first branch after SIGNAL LOGGER, BEFORE the Telegram branch
+// [P-06] Rewritten for paper trading: service_role credential,
+//        idempotent insert, Continue on Fail, IF guard.
 //
-// ВНИМАНИЕ: Това НЕ е Code node — конфигурира се в N8N UI.
-// Долу са точните стойности за всяко поле.
+// NOTE: These are NOT Code nodes — configure them in the N8N UI.
+// Exact values below. Requires 002_signal_ingest.sql to be applied first
+// (the unique index on scan_cycle_id,symbol is what makes on_conflict work).
 // =====================================================
 
-// ── NODE SETTINGS ────────────────────────────────────
+// ── 0. CREDENTIAL (create once, no keys in node text) ─
+//
+// N8N → Credentials → New → "Custom Auth"
+// Name: Supabase service_role (crypto)
+// JSON:
+//   {
+//     "headers": {
+//       "apikey":        "<SERVICE_ROLE_KEY>",
+//       "Authorization": "Bearer <SERVICE_ROLE_KEY>"
+//     }
+//   }
+// Key: Supabase Dashboard → Settings → API → service_role (secret).
+// NEVER put the service_role key in a node field, in the repo, or in a browser.
+// (Custom Auth is used because Supabase needs BOTH headers, and a Header Auth
+//  credential can only carry one.)
+
+// ── 1. IF NODE: "Has Signals?" ────────────────────────
+//
+// Connected to the SIGNAL LOGGER output. Purpose: SIGNAL LOGGER attaches
+// _signal_logger_payload / _signal_logger_count ONLY to item[0] and only when
+// there are selected signals. A no-signal cycle (or items 1..N) has no count,
+// so they must not reach the insert node.
+//
+// Condition (Number):
+//   Value 1: {{ $json._signal_logger_count ?? 0 }}
+//   Operation: is greater than
+//   Value 2: 0
+//
+// TRUE branch  → Supabase Signal Insert
+// FALSE branch → leave unconnected (nothing to do)
+
+// ── 2. HTTP REQUEST NODE: "Supabase Signal Insert" ────
 //
 // Name:    Supabase Signal Insert
 // Method:  POST
-// URL:     https://<PROJECT_REF>.supabase.co/rest/v1/telegram_signals
-//          (замени <PROJECT_REF> с реалния от Supabase Dashboard → Settings → API)
+// URL:     https://<PROJECT_REF>.supabase.co/rest/v1/telegram_signals?on_conflict=scan_cycle_id,symbol
+//          (replace <PROJECT_REF> — Supabase Dashboard → Settings → API)
 //
-// ── BODY ─────────────────────────────────────────────
+// Authentication:       Generic Credential Type → Custom Auth
+// Credential:           Supabase service_role (crypto)
+//
+// Send Headers (manual, no secrets):
+//   Content-Type: application/json
+//   Prefer:       resolution=ignore-duplicates,return=minimal
 //
 // Body Content Type: JSON
 // Specify Body:      Using JSON
 // JSON Body (expression):
 //   {{ JSON.stringify($json._signal_logger_payload) }}
 //
-//   Важно: Supabase REST API приема масив от обекти за bulk insert.
-//   _signal_logger_payload е масивът, построен от SIGNAL LOGGER.
+// Behaviour: re-running a cycle (same scan_cycle_id + symbol) inserts nothing
+// and returns 201/200 without error (ignore-duplicates).
 //
-// ── HEADERS ──────────────────────────────────────────
+// Settings tab:
+//   On Error:  Continue   ("Continue on Fail: ON")
+//   Timeout:   10000 ms   (Options → Timeout)
+// Reason: a Supabase failure must NEVER stop Telegram. The error stays visible
+// in the execution log (node shows the error output) — check it in the daily
+// routine (spec P-31).
+
+// ── 3. CANVAS WIRING / EXECUTION ORDER ────────────────
 //
-// Header 1:
-//   Name:  apikey
-//   Value: <SUPABASE_ANON_KEY>          (от Supabase Dashboard → Settings → API → anon/public)
+// SIGNAL LOGGER is a Code node with ONE output, so "output 1 / output 2" in the
+// spec means two CONNECTIONS from that single output:
 //
-// Header 2:
-//   Name:  Authorization
-//   Value: Bearer <SUPABASE_ANON_KEY>   (същия ключ)
-//
-// Header 3:
-//   Name:  Content-Type
-//   Value: application/json
-//
-// Header 4:
-//   Name:  Prefer
-//   Value: return=minimal               (не връща inserted rows — по-бързо)
-//
-// ── OPTIONS ──────────────────────────────────────────
-//
-// Continue on Fail: OFF  (ако insert гръмне, искаме да разберем веднага)
-// Timeout:          10000 ms
-//
-// ── EXECUTION FLOW ───────────────────────────────────
-//
-// SIGNAL LOGGER слага payload само на item[0].json._signal_logger_payload.
-// Този HTTP Request node се изпълнява ВЕДНЪЖ (за item[0]).
-// След него Loop Over Items чете всички items от SIGNAL LOGGER (не от тук) —
-// свържи Loop Over Items директно към SIGNAL LOGGER, не към Supabase Signal Insert.
-//
-// Canvas order:
 //   SIGNAL RANKING & TOP 5 SELECTION
 //         │
 //         ▼
-//   SIGNAL LOGGER  ──────────────────► Supabase Signal Insert
-//         │                                    (изпълнява се веднъж, за item[0])
-//         ▼
-//   Loop Over Items
-//         │
-//         ▼
-//   Send to Telegram (Telegram node)
+//   SIGNAL LOGGER ──┬──► Has Signals? ──(true)──► Supabase Signal Insert
+//                   │         (placed ABOVE)
+//                   └──► Loop Over Items ──► Send to Telegram
+//                             (placed BELOW)
 //
-// ── ПРОВЕРКА СЛЕД АКТИВИРАНЕ ─────────────────────────
+// Execution order: set Workflow Settings → Execution Order = "v1 (recommended)".
+// In v1, N8N runs branches that leave the same output in top-to-bottom order of
+// the target nodes on the canvas. So place "Has Signals?" visually ABOVE
+// "Loop Over Items". This guarantees the row is saved before Telegram is sent.
+// (Even if order were reversed, correctness is not at risk: the insert is
+//  idempotent and Telegram does not depend on it — but the paper position is
+//  created by the DB trigger at insert time, so insert-first is preferred.)
 //
-// В Supabase → Table Editor → telegram_signals:
-//   очаквай N реда след всеки цикъл (N = брой top сигнали, обикновено 3-5)
+// Do NOT connect Loop Over Items to the insert node — it must read all items
+// from SIGNAL LOGGER, not the single HTTP response.
+
+// ── 4. AFTER ACTIVATION — CHECKS (U) ──────────────────
 //
-// В N8N execution log:
-//   SIGNAL LOGGER ще покаже: "SIGNAL LOGGER: X records ready for Supabase."
-//   HTTP node ще покаже: HTTP 201 Created (при успех)
+// a) Run a cycle. In Supabase → Table Editor → telegram_signals: N new rows,
+//    with entry_min, entry_max, tp*_allocation, sl_distance_pct, total_score,
+//    cycle_timestamp filled, and score_snapshot->'weights' containing numbers.
+// b) Re-execute the same cycle (or re-send the same payload): row count does
+//    NOT increase.
+// c) Telegram messages arrive, unchanged in format.
+// d) Temporarily break the URL → insert node fails (red) but Telegram still sends.
+// e) After 005_security.sql (Part 6): the anon key can no longer write to
+//    telegram_signals.
 //
-// ── RLS (Row Level Security) ─────────────────────────
-//
-// Ако имаш RLS включен на telegram_signals, добави policy:
-//   CREATE POLICY "service_insert" ON telegram_signals
-//   FOR INSERT TO anon WITH CHECK (true);
-//
-// Или използвай service_role ключ вместо anon в headers (по-сигурно за сървърен N8N).
+// ── RLS NOTE ──────────────────────────────────────────
+// service_role bypasses RLS, so no insert policy is needed for N8N.
+// The old advice "CREATE POLICY ... FOR INSERT TO anon WITH CHECK (true)" is
+// REMOVED: anon must not be able to write. 005_security.sql drops any such policy.

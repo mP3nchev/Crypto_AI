@@ -17,4 +17,5 @@ touches `paper_config` inside the transaction.)
 | File | Part | Checks |
 |---|---|---|
 | `T00_schema_structure.sql` | P-02 | tables, column counts, single config row, indexes, seeds, config_version trigger, event/open-symbol uniqueness |
+| `T00b_signal_ingest.sql` | P-04 | new columns, unique `(scan_cycle_id, symbol)`, idempotent re-insert, payload types |
 | `T01`–`T20` | P-08 … P-21 | added together with the functions they test (see spec P-25) |

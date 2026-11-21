@@ -9,7 +9,7 @@ Supabase (PL/pgSQL); N8N only moves data and the dashboard only displays it.
 |---|---|---|---|
 | 0 | Back up / export `telegram_signals` | P-29 | user |
 | 1 | `001_schema.sql` | P-02 | **ready** |
-| 2 | `002_signal_ingest.sql` | P-04 | planned (Part 2) |
+| 2 | `002_signal_ingest.sql` | P-04 | **ready** |
 | 3 | `003_engine.sql` | P-08 … P-15, P-21 | planned (Parts 3–4) |
 | 4 | `004_analytics.sql` | P-17 … P-20, P-28 | planned (Part 5) |
 | 5 | `005_security.sql` | P-23 | planned (Part 6) |
@@ -51,6 +51,35 @@ that node. Choose:
 Record the decision in `paper_config` (option b) or in the changelog (option a).
 Remember: leverage changes the stop/liquidation geometry (P-10), so it must not be
 changed mid-test (config is frozen, P-30).
+
+## Part 2 — Signal integration: deployment (U)
+
+Order matters; do it in this sequence:
+
+1. **Supabase:** run `002_signal_ingest.sql` (SQL Editor). It adds 8 nullable columns and a
+   unique index on `(scan_cycle_id, symbol)`. Old rows are not touched. If the live table
+   already has duplicate `(scan_cycle_id, symbol)` pairs, the file **stops, lists them and
+   deletes nothing** — send the list to the agent/decide manually, then re-run.
+   Check: `select count(*) from pg_indexes where indexname='uq_telegram_signals_cycle_symbol';` → 1
+2. **N8N — SIGNAL LOGGER (P-05):** replace the node code with `row4/SIGNAL LOGGER`.
+   It now also sends `entry_min/max`, `tp1..3_allocation`, `sl_distance_pct`, `total_score`,
+   `cycle_timestamp` and fixes `score_snapshot.weights` (reads `applied_weights`).
+   *Do this only after step 1* — PostgREST rejects unknown columns.
+3. **N8N — insert (P-06):** follow `row4/SUPABASE SIGNAL INSERT — N8N CONFIG`:
+   Custom Auth credential with the **service_role** key, IF node `Has Signals?`,
+   URL with `?on_conflict=scan_cycle_id,symbol`, `Prefer: resolution=ignore-duplicates,return=minimal`,
+   On Error = Continue, branch placed above Telegram.
+4. Run one cycle and do the checks at the bottom of that file.
+
+Optional: `tests/T00b_signal_ingest.sql` in a test project/branch.
+
+## P-07 — Telegram as an optional channel
+
+No new nodes in the main workflow. To stop Telegram messages, **deactivate the
+`Send to Telegram` node** in the N8N UI (right-click → Deactivate). Signals are still
+logged to `telegram_signals`, and (from Part 3) paper positions are still opened.
+Re-activate the node to resume messages. Exit notifications from the monitor are
+controlled separately by `paper_config.notify_telegram_on_exit` (Part 4).
 
 ## Configuration
 
