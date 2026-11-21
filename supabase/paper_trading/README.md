@@ -237,6 +237,43 @@ with `SET ROLE` in a test project or branch.
    Site URL = dashboard URL.
 3. Deploy `dashboard/` (Netlify or Vercel) — see `dashboard/README.md`.
 
+## Part 7 — Quality gates (P-25 … P-28)
+
+Everything below runs on a **throwaway** PostgreSQL, never on Supabase.
+
+| Gate | Command | What it proves |
+|---|---|---|
+| SQL suite | `PGHOST=… PGUSER=… tests/run_all.sh` | creates a scratch DB, applies `001…006` **twice** (idempotent), runs T00–T24 and the concurrency check, drops the DB |
+| Concurrency | `tests/concurrency_test.sh` (part of the above) | with parallel sessions: 6 signals for one symbol → exactly 1 OPEN; 10 signals at `max_open_positions = 3` → exactly 3 OPEN; 4 overlapping monitor runs → ≥ 1 `SKIPPED_LOCKED`, TP1 counted once |
+| Pipeline regression | `scripts/check_pipeline_regression.sh` | only the three allowed files differ in `row1/ … row4/`; `LIMIT` is the only change in `Sort & Select Top 20`; **old vs new `SIGNAL LOGGER` give identical items, order and existing fields** (Telegram input unchanged) — only the new fields and the weights fix differ |
+| Dashboard | `cd dashboard && npm test && npm run build` | formatting, URL filters → RPC params, calendar colouring; types; production bundle without the dev-token hook |
+| CI | `.github/workflows/paper-trading.yml` | runs all of the above on every push / PR (Postgres service container) |
+
+The guards were verified to fail when they should (mutation checks): removing the opening
+lock → *cap breached*; removing lock **and** unique index → *two OPEN positions*; a monitor lock
+that is always granted → *no SKIPPED_LOCKED*; a logger that alters an output item or an existing
+payload field → *regression FAILED*; a forbidden file under `row3/` → *FORBIDDEN*.
+
+### P-28 — reliability and observability (what is where)
+- **Restart-safe:** all state is in Supabase. The per-position cursor + unique keys make every
+  re-run harmless (T11, T14, T20); `paper_ingest_candles` is an upsert, so N8N retries are safe.
+- **`paper_health_v`:** last successful monitor run and its age, OPEN positions not evaluated for
+  > 3 h, positions with DATA_GAP, `INTERNAL_ERROR` in the last 24 h, signals without a position in
+  the last 24 h, and one `warning` flag. The dashboard shows a warning bar and a header pill from it.
+- **Daily 5-minute check (P-31):** the dashboard header pill is green (`Monitor OK`), no warning bar,
+  and `select * from paper_health_v;` shows empty id lists and `warning = false`.
+
+### Known limits (by design, documented — not bugs)
+- The partial first hour after a signal is not evaluated (no look-ahead); a TP/SL touched in
+  that hour is missed. Typical error is small and one-sided against the strategy only for
+  fast moves.
+- If candles for a symbol stop arriving **after** some were received (e.g. delisting), the position
+  stays OPEN and appears in `paper_health_v.stale_open_position_ids`. `DATA_UNAVAILABLE` applies
+  only when there is no candle at all after the evaluation start.
+- Legacy signals (before `003_engine.sql`) have no paper position; the daily 1:1 check counts only
+  signals created after deployment (`paper_health_v.signals_without_position_24h`).
+- Funding is not simulated (`funding_usd` is reserved).
+
 ## Configuration
 
 Single row `paper_config` (id = 1). Every real change increments `config_version`

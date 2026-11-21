@@ -1,0 +1,78 @@
+# Quality gates for the paper-trading system (spec Part 7: P-25, P-26, P-27).
+# Runs on a THROWAWAY PostgreSQL service container — never touches Supabase or production.
+name: paper-trading
+
+on:
+  push:
+    paths:
+      - 'supabase/**'
+      - 'dashboard/**'
+      - 'monitor/**'
+      - 'row1/**'
+      - 'row2/**'
+      - 'row3/**'
+      - 'row4/**'
+      - 'scripts/**'
+      - '.github/workflows/paper-trading.yml'
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  sql:
+    name: SQL tests (T00–T24 + concurrency)
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_PASSWORD: postgres
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd "pg_isready -U postgres" --health-interval 5s --health-timeout 5s --health-retries 10
+    env:
+      PGHOST: localhost
+      PGPORT: 5432
+      PGUSER: postgres
+      PGPASSWORD: postgres
+    steps:
+      - uses: actions/checkout@v4
+      - name: Run the whole SQL suite
+        run: supabase/paper_trading/tests/run_all.sh
+
+  pipeline-regression:
+    name: Main pipeline regression (P-27)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Only allowed files changed, SIGNAL LOGGER behaviour unchanged
+        run: scripts/check_pipeline_regression.sh "$(git merge-base origin/main HEAD)"
+
+  dashboard:
+    name: Dashboard (types, unit tests, build)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: dashboard
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: dashboard/package-lock.json
+      - run: npm ci
+      - run: npm run typecheck
+      - run: npm test
+      - run: npm run build
+        env:
+          VITE_SUPABASE_URL: https://example.invalid
+          VITE_SUPABASE_ANON_KEY: ci-placeholder
+      - name: Production bundle must not contain the dev token hook
+        run: "! grep -rl 'VITE_DEV_ACCESS_TOKEN' dist/assets || (echo 'dev token hook leaked into the bundle'; exit 1)"

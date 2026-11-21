@@ -8,7 +8,16 @@ Each file is self-contained, runs inside `BEGIN … ROLLBACK`, and aborts with
 (They insert temporary rows; the final `ROLLBACK` removes them, but T00 also
 touches `paper_config` inside the transaction.)
 
-## How to run
+## Run everything at once (recommended)
+```bash
+PGHOST=localhost PGUSER=postgres PGPASSWORD=… supabase/paper_trading/tests/run_all.sh
+```
+It creates and drops its own scratch database (`paper_test`), applies `001…006` twice, runs every
+`Txx` file and `concurrency_test.sh`. It refuses to use `postgres`, `template*`, `prod*`.
+`tools/supabase_roles.sql` recreates the `anon / authenticated / service_role` roles and Supabase's
+default grants on a plain PostgreSQL. Use it only there — a Supabase project already has them.
+
+## How to run a single test
 1. Apply `../001_schema.sql` … `../005_security.sql` to the test project (T23 needs 005, T24 needs 006; all others work with or without them).
 2. Supabase → SQL Editor → paste one test file → Run.
 3. Expect `NOTICE: Txx PASSED`. Any `ERROR: Txx: …` is a failure — do not skip it; report it.
