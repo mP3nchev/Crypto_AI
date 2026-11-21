@@ -10,7 +10,7 @@ Supabase (PL/pgSQL); N8N only moves data and the dashboard only displays it.
 | 0 | Back up / export `telegram_signals` | P-29 | user |
 | 1 | `001_schema.sql` | P-02 | **ready** |
 | 2 | `002_signal_ingest.sql` | P-04 | **ready** |
-| 3 | `003_engine.sql` | P-08 … P-15, P-21 | planned (Parts 3–4) |
+| 3 | `003_engine.sql` | P-08 … P-11 ready; P-12 … P-15, P-21 appended in Part 4 | **ready (Part 3)** |
 | 4 | `004_analytics.sql` | P-17 … P-20, P-28 | planned (Part 5) |
 | 5 | `005_security.sql` | P-23 | planned (Part 6) |
 
@@ -80,6 +80,48 @@ No new nodes in the main workflow. To stop Telegram messages, **deactivate the
 logged to `telegram_signals`, and (from Part 3) paper positions are still opened.
 Re-activate the node to resume messages. Exit notifications from the monitor are
 controlled separately by `paper_config.notify_telegram_on_exit` (Part 4).
+
+## Part 3 — Position engine: deployment (U)
+
+1. **Supabase:** run `003_engine.sql` (after 001 and 002). It creates
+   `paper_open_position()` and the trigger `paper_on_signal_insert` on `telegram_signals`.
+   From this moment **every new signal** gets exactly one row in `paper_positions`.
+2. Nothing changes in N8N for this part.
+
+### What happens to each signal (P-08)
+| Check (in this order) | Result |
+|---|---|
+| `paper_config.enabled = false` | SKIPPED `PAPER_DISABLED` |
+| direction not LONG/SHORT | REJECTED `INVALID_DIRECTION` |
+| entry / SL / TP1 missing or ≤ 0 | REJECTED `INVALID_LEVELS` |
+| wrong level order (missing TP2/TP3 = previous level) | REJECTED `INVALID_LEVEL_ORDER` |
+| allocations ≠ 100 ± 0.5 (all missing → 40/40/20, reason `DEFAULT_ALLOCATION`) | REJECTED `INVALID_ALLOCATION` |
+| tier has no slippage in `paper_config` | REJECTED `NO_SLIPPAGE_FOR_TIER` |
+| `sent_at − cycle_timestamp > max_signal_age_minutes` | REJECTED `STALE_SIGNAL` |
+| an OPEN position exists for the symbol (any direction) | SKIPPED `DUPLICATE_OPEN_POSITION` (+ `related_position_id`) |
+| OPEN count ≥ `max_open_positions` | SKIPPED `MAX_OPEN_POSITIONS` |
+| margin > free capital | SKIPPED `INSUFFICIENT_VIRTUAL_BALANCE` |
+| otherwise | **OPEN** + `OPENED` event |
+| any unexpected error | REJECTED `INTERNAL_ERROR: …` + `ERROR` event — **the signal is still saved** |
+
+Reasons that carry numbers keep them after a colon, e.g.
+`STALE_SIGNAL: 52.3 min old (max 45)`. Filter with `status_reason LIKE 'STALE_SIGNAL%'`.
+
+### Checks after 003
+```sql
+-- trigger installed
+select tgname from pg_trigger where tgname = 'paper_on_signal_insert';          -- 1 row
+-- after the next N8N cycle: every NEW signal has exactly one position
+select s.id, s.symbol, s.created_at
+  from telegram_signals s left join paper_positions p on p.signal_id = s.id
+ where p.id is null order by s.id desc;
+-- expected: only signals created BEFORE 003 was applied (legacy rows, see below)
+select status, status_reason, count(*) from paper_positions group by 1,2 order by 1,2;
+```
+
+**Legacy signals:** rows already in `telegram_signals` before 003 do **not** get a
+position (the trigger fires only on new inserts, and opening them now would be
+look-ahead). Daily 1:1 checks therefore count only signals after the deployment.
 
 ## Configuration
 

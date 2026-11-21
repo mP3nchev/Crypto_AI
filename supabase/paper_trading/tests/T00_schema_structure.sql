@@ -5,6 +5,12 @@
 -- =====================================================================
 BEGIN;
 
+-- clean slate inside this transaction (restored by ROLLBACK)
+DELETE FROM public.paper_position_events;
+DELETE FROM public.paper_positions;
+DELETE FROM public.paper_config;
+INSERT INTO public.paper_config (id) VALUES (1);
+
 DO $$
 DECLARE
   t text;
@@ -97,15 +103,21 @@ BEGIN
   END IF;
 
   -- 8. events: duplicate (position, type, NULL tranche) is rejected
+  --    (works with or without the 003 trigger: ON CONFLICT DO NOTHING tolerates
+  --     the rows the trigger may already have created)
   INSERT INTO public.telegram_signals (scan_cycle_id, symbol, tier, signal_direction, entry_price, stop_loss)
     VALUES ('T00', 'T00USDT', 1, 'LONG', 100, 95);
   INSERT INTO public.paper_positions (signal_id, symbol, status)
-    SELECT id, symbol, 'OPEN' FROM public.telegram_signals WHERE scan_cycle_id = 'T00';
+    SELECT id, symbol, 'REJECTED' FROM public.telegram_signals WHERE scan_cycle_id = 'T00'
+    ON CONFLICT DO NOTHING;
   INSERT INTO public.paper_position_events (position_id, event_type)
-    SELECT id, 'OPENED' FROM public.paper_positions WHERE symbol = 'T00USDT';
+    SELECT p.id, 'OPENED' FROM public.paper_positions p
+      JOIN public.telegram_signals s ON s.id = p.signal_id WHERE s.scan_cycle_id = 'T00'
+    ON CONFLICT DO NOTHING;
   BEGIN
     INSERT INTO public.paper_position_events (position_id, event_type)
-      SELECT id, 'OPENED' FROM public.paper_positions WHERE symbol = 'T00USDT';
+      SELECT p.id, 'OPENED' FROM public.paper_positions p
+        JOIN public.telegram_signals s ON s.id = p.signal_id WHERE s.scan_cycle_id = 'T00';
     RAISE EXCEPTION 'T00: duplicate OPENED event was accepted';
   EXCEPTION WHEN unique_violation THEN NULL;
   END;
@@ -113,9 +125,14 @@ BEGIN
   -- 9. only one OPEN position per symbol
   INSERT INTO public.telegram_signals (scan_cycle_id, symbol, tier, signal_direction, entry_price, stop_loss)
     VALUES ('T00b', 'T00USDT', 1, 'LONG', 100, 95);
+  INSERT INTO public.paper_positions (signal_id, symbol, status)
+    SELECT id, symbol, 'REJECTED' FROM public.telegram_signals WHERE scan_cycle_id = 'T00b'
+    ON CONFLICT DO NOTHING;
+  UPDATE public.paper_positions p SET status = 'OPEN'
+    FROM public.telegram_signals s WHERE s.id = p.signal_id AND s.scan_cycle_id = 'T00';
   BEGIN
-    INSERT INTO public.paper_positions (signal_id, symbol, status)
-      SELECT id, symbol, 'OPEN' FROM public.telegram_signals WHERE scan_cycle_id = 'T00b';
+    UPDATE public.paper_positions p SET status = 'OPEN'
+      FROM public.telegram_signals s WHERE s.id = p.signal_id AND s.scan_cycle_id = 'T00b';
     RAISE EXCEPTION 'T00: second OPEN position for the same symbol was accepted';
   EXCEPTION WHEN unique_violation THEN NULL;
   END;
