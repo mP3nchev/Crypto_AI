@@ -142,16 +142,35 @@ function calculateTrendScore(data) {
     const bullish_alignment = close_price > ema_20_2h && ema_20_2h > ema_50_2h;
     const bearish_alignment = close_price < ema_20_2h && ema_20_2h < ema_50_2h;
 
-    if (bullish_alignment) {
+    // [B-05] Include EMA200 in alignment check.
+    // Previously ema_200_2h was declared but never used — bearish_alignment
+    // only checked price<EMA20<EMA50, awarding +30 even when EMA50>EMA200
+    // (incomplete death cross). Full three-EMA alignment is now required for
+    // the +30 "perfect" bucket; missing EMA200 data falls back to the
+    // EMA20/50-only partial check (+15).
+    const full_bullish = bullish_alignment && (ema_200_2h > 0 ? ema_20_2h > ema_50_2h && ema_50_2h > ema_200_2h : true) && close_price > ema_200_2h;
+    const full_bearish = bearish_alignment && (ema_200_2h > 0 ? ema_20_2h < ema_50_2h && ema_50_2h < ema_200_2h : true) && close_price < ema_200_2h;
+
+    if (full_bullish) {
       emaContribution = 30;
-      console.log(`    Perfect Bullish EMA Alignment: +30 points`);
+      console.log(`    Perfect Bullish EMA Alignment (20/50/200): +30 points`);
       if (trendDirection === 'NEUTRAL') { trendDirection = 'LONG'; }
       if (trendDirection === 'SHORT')   { emaContribution = 15; console.log(`    CONFLICT: MACD=SHORT, EMA=LONG -> Reducing confidence`); }
-    } else if (bearish_alignment) {
+    } else if (full_bearish) {
       emaContribution = 30;
-      console.log(`    Perfect Bearish EMA Alignment: +30 points`);
+      console.log(`    Perfect Bearish EMA Alignment (20/50/200): +30 points`);
       if (trendDirection === 'NEUTRAL') { trendDirection = 'SHORT'; }
       if (trendDirection === 'LONG')    { emaContribution = 15;  console.log(`    CONFLICT: MACD=LONG, EMA=SHORT -> Reducing confidence`); }
+    } else if (bullish_alignment) {
+      emaContribution = 20;
+      console.log(`    Partial Bullish EMA (20/50 aligned, EMA200 missing or misaligned): +20 points`);
+      if (trendDirection === 'NEUTRAL') { trendDirection = 'LONG'; }
+      if (trendDirection === 'SHORT')   { emaContribution = 10; console.log(`    CONFLICT: MACD=SHORT, partial EMA=LONG -> Reducing confidence`); }
+    } else if (bearish_alignment) {
+      emaContribution = 20;
+      console.log(`    Partial Bearish EMA (20/50 aligned, EMA200 missing or misaligned): +20 points`);
+      if (trendDirection === 'NEUTRAL') { trendDirection = 'SHORT'; }
+      if (trendDirection === 'LONG')    { emaContribution = 10; console.log(`    CONFLICT: MACD=LONG, partial EMA=SHORT -> Reducing confidence`); }
     } else if (close_price > ema_20_2h) {
       emaContribution = 15;
       console.log(`    Partial Bullish (Price > EMA20): +15 points`);
