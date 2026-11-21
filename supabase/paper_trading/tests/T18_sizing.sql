@@ -1,7 +1,7 @@
 -- =====================================================================
 -- T18_sizing — PERCENT_EQUITY margin and insufficient balance
 -- Spec: P-09. Run in a TEST project/branch only (see tests/README.md).
--- Prerequisites: 001 … 004. Ends with ROLLBACK; aborts on any mismatch.
+-- Prerequisites: 001 … 004 (T23: also 005). Ends with ROLLBACK; aborts on any mismatch.
 -- =====================================================================
 BEGIN;
 

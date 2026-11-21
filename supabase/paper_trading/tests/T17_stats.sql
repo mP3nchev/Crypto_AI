@@ -1,7 +1,7 @@
 -- =====================================================================
 -- T17_stats — statistics, daily P&L, Sofia day boundary
 -- Spec: P-17 … P-20. Run in a TEST project/branch only (see tests/README.md).
--- Prerequisites: 001 … 004. Ends with ROLLBACK; aborts on any mismatch.
+-- Prerequisites: 001 … 004 (T23: also 005). Ends with ROLLBACK; aborts on any mismatch.
 -- =====================================================================
 BEGIN;
 

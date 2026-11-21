@@ -12,7 +12,7 @@ Supabase (PL/pgSQL); N8N only moves data and the dashboard only displays it.
 | 2 | `002_signal_ingest.sql` | P-04 | **ready** |
 | 3 | `003_engine.sql` | P-08 … P-15 | **ready (Parts 3–4)** |
 | 4 | `004_analytics.sql` | P-17 … P-21, P-28 | **ready** |
-| 5 | `005_security.sql` | P-23 | planned (Part 6) |
+| 5 | `005_security.sql` | P-23 | **ready** — read the warning below first |
 
 Every file is idempotent — re-running is safe. After each step run the check below.
 `001_schema.sql` stops with a clear error if `public.telegram_signals` does not
@@ -188,9 +188,43 @@ The previous result is kept in the `OPENED` event under `details -> 'recompute_l
 It refuses SKIPPED/REJECTED positions, and positions whose symbol already has another
 OPEN position (reopening would break the one-open-per-symbol rule).
 
-> **Security note:** until `005_security.sql` (RLS) is applied, the `paper_*` tables are
-> reachable with the anon key through the REST API (Supabase grants table access by
-> default). Apply 005 before sharing the anon key anywhere (e.g. the dashboard).
+> **Security note:** until `005_security.sql` is applied, the `paper_*` tables are
+> reachable with the anon key through the REST API. See the Security section.
+
+## Security — `005_security.sql` (P-23) (U)
+
+> ⚠️ **Order matters.** Apply 005 **only after** the N8N node `Supabase Signal Insert`
+> uses the **service_role** credential (Part 2, step 3). After 005 the anon key can no
+> longer write to `telegram_signals`; with the old anon setup, signals would stop being saved.
+
+What it does:
+- RLS **on** for `telegram_signals` and all `paper_*` tables.
+- One **SELECT-only** policy per table for `authenticated` (the dashboard user).
+- **No** insert/update/delete policies — only `service_role` (N8N) writes; the position
+  trigger runs as the table owner.
+- `anon`: no table, view or function access. Old anon/public policies on these tables
+  (e.g. the previously documented `service_insert`) are **dropped** and listed as NOTICEs.
+- Statistics RPCs: `authenticated` + `service_role`. Monitor / evaluate / ingest /
+  recompute: `service_role` only.
+- Ends with a self-check that raises an error if anything is still open.
+  Expected last message: `005_security: OK — RLS on, read-only for authenticated, no anon access`.
+
+### Check from outside (anon key, no login) — must be refused
+```bash
+curl -s "https://<PROJECT_REF>.supabase.co/rest/v1/paper_positions?select=id&limit=1" -H "apikey: <ANON_KEY>"
+```
+```bash
+curl -s -X POST "https://<PROJECT_REF>.supabase.co/rest/v1/telegram_signals" -H "apikey: <ANON_KEY>" -H "Content-Type: application/json" -d '{"scan_cycle_id":"x","symbol":"X","tier":1,"signal_direction":"LONG","entry_price":1,"stop_loss":1}'
+```
+Both must return an error such as `permission denied for table …` (HTTP 401/403), not data.
+
+### Supabase Auth (before the dashboard goes live)
+- Authentication → Providers → Email: enable **magic link**; Authentication → Settings:
+  **disable new sign-ups**.
+- Authentication → Users → **Invite / add exactly one user** (you).
+
+`tests/T23_security.sql` checks the full access matrix (anon / authenticated / service_role)
+with `SET ROLE` in a test project or branch.
 
 ## Configuration
 

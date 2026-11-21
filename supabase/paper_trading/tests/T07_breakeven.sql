@@ -1,7 +1,7 @@
 -- =====================================================================
 -- T07_breakeven — break-even after TP1, effective next candle
 -- Spec: P-14 steps 2, 6. Run in a TEST project/branch only (see tests/README.md).
--- Prerequisites: 001 … 004. Ends with ROLLBACK; aborts on any mismatch.
+-- Prerequisites: 001 … 004 (T23: also 005). Ends with ROLLBACK; aborts on any mismatch.
 -- =====================================================================
 BEGIN;
 

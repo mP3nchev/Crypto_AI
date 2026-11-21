@@ -1,7 +1,7 @@
 -- =====================================================================
 -- T12_future_candle — unclosed candle is ignored
 -- Spec: P-13, P-14. Run in a TEST project/branch only (see tests/README.md).
--- Prerequisites: 001 … 004. Ends with ROLLBACK; aborts on any mismatch.
+-- Prerequisites: 001 … 004 (T23: also 005). Ends with ROLLBACK; aborts on any mismatch.
 -- =====================================================================
 BEGIN;
 

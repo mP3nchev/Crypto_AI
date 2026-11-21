@@ -1,7 +1,7 @@
 -- =====================================================================
 -- T01_example_1a — Example 1a: LONG TP1 then SL
 -- Spec: P-14, P-15, P-16. Run in a TEST project/branch only (see tests/README.md).
--- Prerequisites: 001 … 004. Ends with ROLLBACK; aborts on any mismatch.
+-- Prerequisites: 001 … 004 (T23: also 005). Ends with ROLLBACK; aborts on any mismatch.
 -- =====================================================================
 BEGIN;
 

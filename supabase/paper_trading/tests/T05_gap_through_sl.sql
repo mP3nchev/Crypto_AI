@@ -1,7 +1,7 @@
 -- =====================================================================
 -- T05_gap_through_sl — gap below SL fills at open
 -- Spec: P-14 step 4. Run in a TEST project/branch only (see tests/README.md).
--- Prerequisites: 001 … 004. Ends with ROLLBACK; aborts on any mismatch.
+-- Prerequisites: 001 … 004 (T23: also 005). Ends with ROLLBACK; aborts on any mismatch.
 -- =====================================================================
 BEGIN;
 

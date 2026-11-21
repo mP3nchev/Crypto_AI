@@ -1,7 +1,7 @@
 -- =====================================================================
 -- T13_partial_first_hour — signal at 10:14: the 10:00 candle is not evaluated
 -- Spec: P-10, P-14. Run in a TEST project/branch only (see tests/README.md).
--- Prerequisites: 001 … 004. Ends with ROLLBACK; aborts on any mismatch.
+-- Prerequisites: 001 … 004 (T23: also 005). Ends with ROLLBACK; aborts on any mismatch.
 -- =====================================================================
 BEGIN;
 

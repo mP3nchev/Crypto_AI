@@ -1,7 +1,7 @@
 -- =====================================================================
 -- T15_lock_held — concurrent run backs off
 -- Spec: P-14 locking. Run in a TEST project/branch only (see tests/README.md).
--- Prerequisites: 001 … 004. Ends with ROLLBACK; aborts on any mismatch.
+-- Prerequisites: 001 … 004 (T23: also 005). Ends with ROLLBACK; aborts on any mismatch.
 -- =====================================================================
 BEGIN;
 

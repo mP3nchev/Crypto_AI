@@ -1,7 +1,7 @@
 -- =====================================================================
 -- T04_two_tps_one_candle — TP1 and TP2 in one candle
 -- Spec: P-14 step 5. Run in a TEST project/branch only (see tests/README.md).
--- Prerequisites: 001 … 004. Ends with ROLLBACK; aborts on any mismatch.
+-- Prerequisites: 001 … 004 (T23: also 005). Ends with ROLLBACK; aborts on any mismatch.
 -- =====================================================================
 BEGIN;
 

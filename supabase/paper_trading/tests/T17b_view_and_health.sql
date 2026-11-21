@@ -1,7 +1,7 @@
 -- =====================================================================
 -- T17b_view_and_health — view fields, indicative P&L, health warnings
 -- Spec: P-17, P-20, P-28. Run in a TEST project/branch only (see tests/README.md).
--- Prerequisites: 001 … 004. Ends with ROLLBACK; aborts on any mismatch.
+-- Prerequisites: 001 … 004 (T23: also 005). Ends with ROLLBACK; aborts on any mismatch.
 -- =====================================================================
 BEGIN;
 

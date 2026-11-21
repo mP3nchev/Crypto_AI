@@ -76,7 +76,7 @@ def write(name, part, title, body):
     hdr=f'''-- =====================================================================
 -- {name} — {title}
 -- Spec: {part}. Run in a TEST project/branch only (see tests/README.md).
--- Prerequisites: 001 … 004. Ends with ROLLBACK; aborts on any mismatch.
+-- Prerequisites: 001 … 004 (T23: also 005). Ends with ROLLBACK; aborts on any mismatch.
 -- =====================================================================
 '''
     open(os.path.join(D,name+'.sql'),'w').write(hdr+PRE+'\nDO $$\n'+body.strip('\n')+f"\n\n  RAISE NOTICE '{name.split('_')[0]} PASSED: {title}';\nEND $$;\n\nROLLBACK;\n")
@@ -832,4 +832,98 @@ write('T20_recompute','P-21','recompute gives an identical result', DECL.replace
   EXCEPTION WHEN raise_exception THEN
     IF SQLERRM LIKE 'T20:%' THEN RAISE; END IF;
   END;
+""")
+
+# ======================= PART 6 (security) =======================
+write('T23_security','P-23','RLS and privileges per role (anon / authenticated / service_role)', """DECLARE
+  p public.paper_positions;
+  v_err text;
+  v_n bigint;
+  v_stats jsonb;
+  v_sig int;
+  v_results jsonb := '{}'::jsonb;
+BEGIN
+  p := pg_temp.sig('SECUSDT','LONG',1, 100,95,105,110,115);   -- as the owner (postgres)
+
+  -- ---------- anon: no access at all ----------
+  EXECUTE 'SET LOCAL ROLE anon';
+  BEGIN PERFORM count(*) FROM public.paper_positions; v_err := 'ok';
+  EXCEPTION WHEN insufficient_privilege THEN v_err := 'denied'; END;
+  v_results := v_results || jsonb_build_object('anon_select_positions', v_err);
+  BEGIN PERFORM count(*) FROM public.telegram_signals; v_err := 'ok';
+  EXCEPTION WHEN insufficient_privilege THEN v_err := 'denied'; END;
+  v_results := v_results || jsonb_build_object('anon_select_signals', v_err);
+  BEGIN
+    INSERT INTO public.telegram_signals (scan_cycle_id, symbol, tier, signal_direction, entry_price, stop_loss)
+    VALUES ('T23-anon', 'ANONUSDT', 1, 'LONG', 100, 95);
+    v_err := 'ok';
+  EXCEPTION WHEN insufficient_privilege THEN v_err := 'denied'; END;
+  v_results := v_results || jsonb_build_object('anon_insert_signal', v_err);
+  BEGIN PERFORM public.paper_stats(); v_err := 'ok';
+  EXCEPTION WHEN insufficient_privilege THEN v_err := 'denied'; END;
+  v_results := v_results || jsonb_build_object('anon_stats', v_err);
+  BEGIN PERFORM * FROM public.paper_positions_v; v_err := 'ok';
+  EXCEPTION WHEN insufficient_privilege THEN v_err := 'denied'; END;
+  v_results := v_results || jsonb_build_object('anon_view', v_err);
+  EXECUTE 'RESET ROLE';
+
+  -- ---------- authenticated: read only ----------
+  EXECUTE 'SET LOCAL ROLE authenticated';
+  BEGIN SELECT count(*) INTO v_n FROM public.paper_positions_v; v_err := 'ok:' || v_n;
+  EXCEPTION WHEN insufficient_privilege THEN v_err := 'denied'; END;
+  v_results := v_results || jsonb_build_object('auth_view', v_err);
+  BEGIN v_stats := public.paper_stats(); v_err := 'ok:' || (v_stats->>'open_positions');
+  EXCEPTION WHEN insufficient_privilege THEN v_err := 'denied'; END;
+  v_results := v_results || jsonb_build_object('auth_stats', v_err);
+  BEGIN PERFORM * FROM public.paper_health_v; v_err := 'ok';
+  EXCEPTION WHEN insufficient_privilege THEN v_err := 'denied'; END;
+  v_results := v_results || jsonb_build_object('auth_health', v_err);
+  BEGIN
+    INSERT INTO public.telegram_signals (scan_cycle_id, symbol, tier, signal_direction, entry_price, stop_loss)
+    VALUES ('T23-auth', 'AUTHUSDT', 1, 'LONG', 100, 95);
+    v_err := 'ok';
+  EXCEPTION WHEN insufficient_privilege THEN v_err := 'denied'; END;
+  v_results := v_results || jsonb_build_object('auth_insert_signal', v_err);
+  BEGIN UPDATE public.paper_config SET enabled = false WHERE id = 1; v_err := 'ok';
+  EXCEPTION WHEN insufficient_privilege THEN v_err := 'denied'; END;
+  v_results := v_results || jsonb_build_object('auth_update_config', v_err);
+  BEGIN DELETE FROM public.paper_position_events; v_err := 'ok';
+  EXCEPTION WHEN insufficient_privilege THEN v_err := 'denied'; END;
+  v_results := v_results || jsonb_build_object('auth_delete_events', v_err);
+  BEGIN PERFORM public.paper_evaluate_positions(); v_err := 'ok';
+  EXCEPTION WHEN insufficient_privilege THEN v_err := 'denied'; END;
+  v_results := v_results || jsonb_build_object('auth_evaluate', v_err);
+  BEGIN PERFORM public.paper_recompute_position(p.id); v_err := 'ok';
+  EXCEPTION WHEN insufficient_privilege THEN v_err := 'denied'; END;
+  v_results := v_results || jsonb_build_object('auth_recompute', v_err);
+  EXECUTE 'RESET ROLE';
+
+  -- ---------- service_role: N8N writes, trigger opens the position ----------
+  EXECUTE 'SET LOCAL ROLE service_role';
+  BEGIN
+    INSERT INTO public.telegram_signals (scan_cycle_id, symbol, tier, signal_direction, entry_price, stop_loss,
+                                         tp1, tp2, tp3, tp1_allocation, tp2_allocation, tp3_allocation)
+    VALUES ('T23-svc', 'SVCUSDT', 1, 'LONG', 100, 95, 105, 110, 115, 40, 40, 20)
+    RETURNING id INTO v_sig;
+    v_err := 'ok';
+  EXCEPTION WHEN insufficient_privilege THEN v_err := 'denied'; END;
+  v_results := v_results || jsonb_build_object('svc_insert_signal', v_err);
+  BEGIN PERFORM public.paper_evaluate_positions(); v_err := 'ok';
+  EXCEPTION WHEN insufficient_privilege THEN v_err := 'denied'; END;
+  v_results := v_results || jsonb_build_object('svc_evaluate', v_err);
+  BEGIN PERFORM public.paper_ingest_candles('[]'::jsonb); PERFORM public.paper_get_monitor_targets(); v_err := 'ok';
+  EXCEPTION WHEN insufficient_privilege THEN v_err := 'denied'; END;
+  v_results := v_results || jsonb_build_object('svc_monitor_rpcs', v_err);
+  EXECUTE 'RESET ROLE';
+
+  PERFORM pg_temp.chk(v_results = jsonb_build_object(
+      'anon_select_positions', 'denied', 'anon_select_signals', 'denied',
+      'anon_insert_signal', 'denied', 'anon_stats', 'denied', 'anon_view', 'denied',
+      'auth_view', 'ok:1', 'auth_stats', 'ok:1', 'auth_health', 'ok',
+      'auth_insert_signal', 'denied', 'auth_update_config', 'denied',
+      'auth_delete_events', 'denied', 'auth_evaluate', 'denied', 'auth_recompute', 'denied',
+      'svc_insert_signal', 'ok', 'svc_evaluate', 'ok', 'svc_monitor_rpcs', 'ok'),
+    'T23: unexpected access matrix: ' || v_results::text);
+  PERFORM pg_temp.chk((SELECT status FROM public.paper_positions WHERE signal_id = v_sig) = 'OPEN',
+                      'T23: service_role insert must open a position via the trigger');
 """)
