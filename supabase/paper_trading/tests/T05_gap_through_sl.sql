@@ -1,7 +1,7 @@
 -- =====================================================================
 -- T05_gap_through_sl — gap below SL fills at open
 -- Spec: P-14 step 4. Run in a TEST project/branch only (see tests/README.md).
--- Prerequisites: 001, 002, 003 (incl. Part 4). Ends with ROLLBACK; aborts on any mismatch.
+-- Prerequisites: 001 … 004. Ends with ROLLBACK; aborts on any mismatch.
 -- =====================================================================
 BEGIN;
 
@@ -11,6 +11,7 @@ DELETE FROM public.paper_position_events;
 DELETE FROM public.paper_positions;
 DELETE FROM public.paper_candles;
 DELETE FROM public.paper_monitor_runs;
+DELETE FROM public.telegram_signals;
 DELETE FROM public.paper_config;
 INSERT INTO public.paper_config (id) VALUES (1);   -- spec defaults
 

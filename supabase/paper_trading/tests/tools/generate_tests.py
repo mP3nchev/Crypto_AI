@@ -10,6 +10,7 @@ DELETE FROM public.paper_position_events;
 DELETE FROM public.paper_positions;
 DELETE FROM public.paper_candles;
 DELETE FROM public.paper_monitor_runs;
+DELETE FROM public.telegram_signals;
 DELETE FROM public.paper_config;
 INSERT INTO public.paper_config (id) VALUES (1);   -- spec defaults
 
@@ -75,7 +76,7 @@ def write(name, part, title, body):
     hdr=f'''-- =====================================================================
 -- {name} — {title}
 -- Spec: {part}. Run in a TEST project/branch only (see tests/README.md).
--- Prerequisites: 001, 002, 003 (incl. Part 4). Ends with ROLLBACK; aborts on any mismatch.
+-- Prerequisites: 001 … 004. Ends with ROLLBACK; aborts on any mismatch.
 -- =====================================================================
 '''
     open(os.path.join(D,name+'.sql'),'w').write(hdr+PRE+'\nDO $$\n'+body.strip('\n')+f"\n\n  RAISE NOTICE '{name.split('_')[0]} PASSED: {title}';\nEND $$;\n\nROLLBACK;\n")
@@ -620,4 +621,215 @@ write('T15_lock_held','P-14 locking','concurrent run backs off', DECL + f"""
   PERFORM pg_temp.chk(p.tp_hits = 0 AND p.last_evaluated_open_time IS NULL, 'T15: no changes while locked');
   PERFORM pg_temp.chk(pg_temp.exits(p.id) = 0, 'T15: no events while locked');
   PERFORM pg_temp.chk((SELECT status FROM public.paper_monitor_runs ORDER BY id DESC LIMIT 1) = 'SKIPPED_LOCKED', 'T15: run row');
+""")
+
+# ======================= PART 5 =======================
+T17_DECL = """DECLARE
+  p public.paper_positions;
+  s jsonb;
+  d record;
+  n int;
+BEGIN"""
+
+T17_SETUP = """
+  -- helper: open a position and close it directly with a given net / close time
+  CREATE OR REPLACE FUNCTION pg_temp.closed(p_symbol text, p_dir text, p_tier int,
+                                            p_net numeric, p_closed timestamptz)
+  RETURNS bigint LANGUAGE plpgsql AS $f$
+  DECLARE p public.paper_positions;
+  BEGIN
+    IF p_dir = 'LONG' THEN
+      p := pg_temp.sig(p_symbol, 'LONG', p_tier, 100,95,105,110,115, 40,40,20, 1, NULL, p_closed - interval '5 hours');
+    ELSE
+      p := pg_temp.sig(p_symbol, 'SHORT', p_tier, 100,105,95,90,85, 40,40,20, 1, NULL, p_closed - interval '5 hours');
+    END IF;
+    UPDATE public.paper_positions
+       SET status = 'CLOSED', remaining_pct = 0, realized_net_usd = p_net, closed_at = p_closed,
+           duration_hours = 5, exit_reason = 'TEST'
+     WHERE id = p.id;
+    RETURN p.id;
+  END $f$;
+
+  PERFORM pg_temp.closed('BTCUSDT', 'LONG',  1,  10,    '2026-11-05 10:00+00');
+  PERFORM pg_temp.closed('ETHUSDT', 'SHORT', 2,  -5,    '2026-11-05 11:00+00');
+  PERFORM pg_temp.closed('SOLUSDT', 'LONG',  1,   0.005,'2026-11-05 12:00+00');   -- BREAKEVEN
+  PERFORM pg_temp.closed('XRPUSDT', 'LONG',  3,  20,    '2026-11-05 21:30+00');   -- 23:30 Sofia, same day
+  PERFORM pg_temp.closed('ADAUSDT', 'LONG',  2,  -8,    '2026-11-05 23:30+00');   -- 01:30 Sofia, NEXT day
+  p := pg_temp.sig('DOTUSDT','LONG',1, 100,95,105,110,115);                         -- stays OPEN
+  p := pg_temp.sig('BADUSDT','LONG',1, 100,101,105,110,115, 40,40,20, 1, NULL, '2026-11-05 10:00+00');  -- REJECTED
+"""
+
+write('T17_stats','P-17 … P-20','statistics, daily P&L, Sofia day boundary', T17_DECL + T17_SETUP + """
+  -- the 23:30 UTC trade belongs to the NEXT day in Europe/Sofia
+  PERFORM pg_temp.chk((SELECT closed_date_local FROM public.paper_positions_v WHERE symbol = 'ADAUSDT') = '2026-11-06',
+                      'T17: 23:30 UTC must be 2026-11-06 in Sofia');
+  PERFORM pg_temp.chk((SELECT closed_date_local FROM public.paper_positions_v WHERE symbol = 'XRPUSDT') = '2026-11-05',
+                      'T17: 21:30 UTC is still 2026-11-05 in Sofia');
+
+  s := public.paper_stats('2026-11-05', '2026-11-05');
+  PERFORM pg_temp.chk((s->>'trades')::int = 4 AND (s->>'wins')::int = 2 AND (s->>'losses')::int = 1
+                  AND (s->>'breakeven')::int = 1, 'T17: day counts ' || s::text);
+  PERFORM pg_temp.chk((s->>'win_rate_pct')::numeric = 50, 'T17: win rate');
+  PERFORM pg_temp.chk((s->>'total_net_usd')::numeric = 25.005, 'T17: total net');
+  PERFORM pg_temp.chk((s->>'total_return_pct')::numeric = 2.5005, 'T17: return %');
+  PERFORM pg_temp.chk((s->>'avg_win_usd')::numeric = 15 AND (s->>'avg_loss_usd')::numeric = -5, 'T17: avg win/loss');
+  PERFORM pg_temp.chk((s->>'profit_factor')::numeric = 6, 'T17: profit factor 30/5');
+  PERFORM pg_temp.chk((s->>'expectancy_usd')::numeric = 6.25125, 'T17: expectancy');
+  PERFORM pg_temp.chk((s->>'avg_duration_hours')::numeric = 5, 'T17: avg duration');
+  PERFORM pg_temp.chk((s->>'open_positions')::int = 1, 'T17: open positions ignore the date filter');
+  PERFORM pg_temp.chk((s->>'rejected')::int = 1 AND (s->>'skipped')::int = 0, 'T17: rejected by opened date');
+
+  s := public.paper_stats('2026-11-06', '2026-11-06');
+  PERFORM pg_temp.chk((s->>'trades')::int = 1 AND (s->>'total_net_usd')::numeric = -8
+                  AND (s->>'profit_factor')::numeric = 0 AND (s->>'win_rate_pct')::numeric = 0, 'T17: next day (PF = 0/8 = 0) ' || s::text);
+
+  s := public.paper_stats('2026-11-01', '2026-11-30');
+  PERFORM pg_temp.chk((s->>'trades')::int = 5 AND (s->>'total_net_usd')::numeric = 17.005, 'T17: month');
+  PERFORM pg_temp.chk(pg_temp.near((s->>'profit_factor')::numeric, 30/13.0, 1e-9), 'T17: month PF');
+  PERFORM pg_temp.chk(pg_temp.near((s->>'max_drawdown_pct')::numeric, 8/1025.005*100, 1e-9),
+                      'T17: max drawdown ' || (s->>'max_drawdown_pct'));
+
+  s := public.paper_stats('2026-11-01', '2026-11-30', p_symbols => ARRAY['BTCUSDT','XRPUSDT']);
+  PERFORM pg_temp.chk(s->'profit_factor' = 'null'::jsonb, 'T17: no losses -> profit factor NULL');
+
+  s := public.paper_stats('2026-11-10', '2026-11-12');
+  PERFORM pg_temp.chk((s->>'trades')::int = 0 AND (s->>'win_rate_pct')::numeric = 0
+                  AND s->'expectancy_usd' = 'null'::jsonb, 'T17: empty range');
+
+  -- filters
+  s := public.paper_stats('2026-11-01', '2026-11-30', p_direction => 'SHORT');
+  PERFORM pg_temp.chk((s->>'trades')::int = 1 AND (s->>'total_net_usd')::numeric = -5
+                  AND (s->>'open_positions')::int = 0, 'T17: direction filter');
+  s := public.paper_stats('2026-11-01', '2026-11-30', p_tiers => ARRAY[1]);
+  PERFORM pg_temp.chk((s->>'trades')::int = 2 AND (s->>'total_net_usd')::numeric = 10.005, 'T17: tier filter');
+  s := public.paper_stats('2026-11-01', '2026-11-30', p_categories => ARRAY['BTC']);
+  PERFORM pg_temp.chk((s->>'trades')::int = 1 AND (s->>'total_net_usd')::numeric = 10, 'T17: category filter');
+  s := public.paper_stats('2026-11-01', '2026-11-30', p_symbols => ARRAY['XRPUSDT','ADAUSDT']);
+  PERFORM pg_temp.chk((s->>'trades')::int = 2 AND (s->>'total_net_usd')::numeric = 12, 'T17: symbol filter');
+  s := public.paper_stats('2026-11-01', '2026-11-30', p_symbols => ARRAY[]::text[]);
+  PERFORM pg_temp.chk((s->>'trades')::int = 5, 'T17: empty array = all');
+
+  -- daily P&L: every day of the month, cumulative from 0
+  SELECT count(*) INTO n FROM public.paper_daily_pnl('2026-11-17');
+  PERFORM pg_temp.chk(n = 30, 'T17: November must have 30 rows, got ' || n);
+  SELECT * INTO d FROM public.paper_daily_pnl('2026-11-01') WHERE day = '2026-11-01';
+  PERFORM pg_temp.chk(d.trades = 0 AND d.net_usd = 0 AND d.cumulative_net_usd = 0, 'T17: empty day');
+  SELECT * INTO d FROM public.paper_daily_pnl('2026-11-01') WHERE day = '2026-11-05';
+  PERFORM pg_temp.chk(d.trades = 4 AND d.wins = 2 AND d.losses = 1 AND d.net_usd = 25.005
+                  AND d.cumulative_net_usd = 25.005, 'T17: day 5');
+  SELECT * INTO d FROM public.paper_daily_pnl('2026-11-01') WHERE day = '2026-11-06';
+  PERFORM pg_temp.chk(d.trades = 1 AND d.net_usd = -8 AND d.cumulative_net_usd = 17.005, 'T17: day 6');
+  SELECT * INTO d FROM public.paper_daily_pnl('2026-11-01') WHERE day = '2026-11-30';
+  PERFORM pg_temp.chk(d.cumulative_net_usd = 17.005, 'T17: month end cumulative');
+  PERFORM pg_temp.chk((SELECT sum(net_usd) FROM public.paper_daily_pnl('2026-11-01'))
+                      = (public.paper_stats('2026-11-01','2026-11-30')->>'total_net_usd')::numeric,
+                      'T17: daily sum = monthly stats');
+  SELECT count(*) INTO n FROM public.paper_daily_pnl('2026-11-01', p_direction => 'SHORT') WHERE trades > 0;
+  PERFORM pg_temp.chk(n = 1, 'T17: daily P&L respects filters');
+
+  -- comparison breakdown
+  PERFORM pg_temp.chk((SELECT count(*) FROM public.paper_stats_breakdown('tier', '2026-11-01', '2026-11-30')) = 3,
+                      'T17: breakdown by tier');
+  PERFORM pg_temp.chk((SELECT (stats->>'total_net_usd')::numeric FROM public.paper_stats_breakdown('direction', '2026-11-01', '2026-11-30')
+                        WHERE segment = 'LONG') = 22.005 AND
+                      (SELECT bool_and(small_sample) FROM public.paper_stats_breakdown('symbol')), 'T17: breakdown by direction / small sample');
+
+  -- determinism: same data, same answer
+  PERFORM pg_temp.chk(public.paper_stats('2026-11-01','2026-11-30') = public.paper_stats('2026-11-01','2026-11-30'),
+                      'T17: repeat call must be identical');
+""")
+
+write('T17b_view_and_health','P-17, P-20, P-28','view fields, indicative P&L, health warnings', DECL + f"""
+  r := (SELECT to_jsonb(h) FROM public.paper_health_v h);
+  PERFORM pg_temp.chk(NOT (r->>'warning')::boolean, 'T17b: empty system has no warning ' || r::text);
+
+  UPDATE public.paper_config SET leverage_override = 5 WHERE id = 1;
+  p := {EX1};
+  PERFORM pg_temp.candle('BTCUSDT', b + interval '1 hour', 80050, 81300, 79900, 81000);  -- TP1
+  -- health: OPEN position, no OK run yet -> warning
+  PERFORM pg_temp.chk((SELECT warning FROM public.paper_health_v), 'T17b: no successful run yet -> warning');
+  r := public.paper_evaluate_positions();
+  PERFORM pg_temp.chk((SELECT last_ok_run_age_hours < 0.1 FROM public.paper_health_v), 'T17b: last OK run age');
+  -- cursor is b+1h (~78h ago) -> the position counts as not evaluated for > 3h
+  PERFORM pg_temp.chk((SELECT p.id = ANY (stale_open_position_ids) AND warning FROM public.paper_health_v),
+                      'T17b: stale OPEN position flagged');
+
+  -- view: partial realised and indicative unrealised (latest close 81000)
+  r := (SELECT to_jsonb(v) FROM public.paper_positions_v v WHERE id = p.id);
+  PERFORM pg_temp.chk(pg_temp.near((r->>'partially_realized_net_usd')::numeric, 1.34), 'T17b: partially realised ' || (r->>'partially_realized_net_usd'));
+  PERFORM pg_temp.chk((r->>'last_price')::numeric = 81000, 'T17b: last price');
+  PERFORM pg_temp.chk(pg_temp.near((r->>'indicative_unrealized_usd')::numeric,
+                      (250/80040.0*0.6) * ((81000 - 80040) - (80040 + 81000) * 0.00055), 1e-9),
+                      'T17b: indicative unrealised ' || (r->>'indicative_unrealized_usd'));
+  PERFORM pg_temp.chk(r->'outcome' = 'null'::jsonb AND (r->>'avg_exit_price')::numeric = 81200, 'T17b: open has no outcome; avg exit = TP1');
+  -- partial / indicative never enter the metrics
+  PERFORM pg_temp.chk((public.paper_stats()->>'trades')::int = 0
+                  AND pg_temp.near((public.paper_stats()->>'partially_realized_usd')::numeric, 1.34), 'T17b: stats extras');
+
+  PERFORM pg_temp.candle('BTCUSDT', b + interval '2 hours', 80500, 80600, 78700, 78900);  -- SL
+  r := public.paper_evaluate_positions();
+  r := (SELECT to_jsonb(v) FROM public.paper_positions_v v WHERE id = p.id);
+  PERFORM pg_temp.chk(r->>'outcome' = 'LOSS' AND r->'indicative_unrealized_usd' = 'null'::jsonb, 'T17b: closed view row');
+  PERFORM pg_temp.chk(pg_temp.near((r->>'avg_exit_price')::numeric, (81200*0.4 + 78760.6*0.6), 1e-6), 'T17b: weighted avg exit');
+  PERFORM pg_temp.chk(pg_temp.near((r->>'price_move_pct')::numeric, ((81200*0.4 + 78760.6*0.6)/80040 - 1)*100, 1e-9), 'T17b: price move');
+
+  -- INTERNAL_ERROR in the last 24 h -> warning
+  INSERT INTO public.telegram_signals (scan_cycle_id, symbol, tier, signal_direction, entry_price, stop_loss)
+  VALUES ('T17b', 'ERRUSDT', 1, 'LONG', 100, 95);
+  UPDATE public.paper_positions SET status_reason = 'INTERNAL_ERROR: test'
+   WHERE signal_id = (SELECT id FROM public.telegram_signals WHERE scan_cycle_id = 'T17b');
+  PERFORM pg_temp.chk((SELECT cardinality(internal_error_position_ids_24h) = 1 FROM public.paper_health_v), 'T17b: internal error listed');
+""")
+
+write('T20_recompute','P-21','recompute gives an identical result', DECL.replace('BEGIN', '  before jsonb;\n  after jsonb;\n  agg_before jsonb;\nBEGIN') + f"""
+  UPDATE public.paper_config SET leverage_override = 5 WHERE id = 1;
+  p := {EX1};
+  PERFORM pg_temp.candle('BTCUSDT', b + interval '1 hour',  80050, 81300, 79900, 81000);
+  PERFORM pg_temp.candle('BTCUSDT', b + interval '2 hours', 80100, 80200, 80000, 80100);
+  PERFORM pg_temp.candle('BTCUSDT', b + interval '4 hours', 80500, 80600, 78700, 78900);  -- after a gap
+  r := public.paper_evaluate_positions();
+
+  SELECT jsonb_agg(jsonb_build_array(event_type, tranche, candle_open_time, fill_price, qty, net_usd) ORDER BY id)
+    INTO before FROM public.paper_position_events WHERE position_id = p.id;
+  SELECT to_jsonb(x) - 'id' INTO agg_before
+    FROM (SELECT status, exit_reason, exit_summary, remaining_pct, tp_hits, realized_gross_usd, fees_usd,
+                 realized_net_usd, return_on_margin_pct, closed_at, duration_hours,
+                 last_evaluated_open_time, has_data_gap, id
+            FROM public.paper_positions WHERE id = p.id) x;
+  PERFORM pg_temp.chk(agg_before->>'status' = 'CLOSED' AND (agg_before->>'has_data_gap')::boolean, 'T20: setup');
+
+  r := public.paper_recompute_position(p.id, 'T20 test');
+  q := pg_temp.pos(p.id);
+  PERFORM pg_temp.chk(q.status = 'OPEN' AND q.remaining_pct = 100 AND q.realized_net_usd = 0
+                  AND q.last_evaluated_open_time IS NULL AND NOT q.has_data_gap, 'T20: reset');
+  PERFORM pg_temp.chk((SELECT array_agg(event_type) FROM public.paper_position_events WHERE position_id = p.id) = ARRAY['OPENED'],
+                      'T20: only OPENED remains');
+  PERFORM pg_temp.chk((SELECT details->'recompute_log'->0->>'reason' FROM public.paper_position_events
+                        WHERE position_id = p.id AND event_type = 'OPENED') = 'T20 test', 'T20: audit log in OPENED details');
+
+  r := public.paper_evaluate_positions();
+  SELECT jsonb_agg(jsonb_build_array(event_type, tranche, candle_open_time, fill_price, qty, net_usd) ORDER BY id)
+    INTO after FROM public.paper_position_events WHERE position_id = p.id;
+  PERFORM pg_temp.chk(after = before, 'T20: events differ after recompute: ' || after::text || ' vs ' || before::text);
+  PERFORM pg_temp.chk((SELECT to_jsonb(x) - 'id'
+                         FROM (SELECT status, exit_reason, exit_summary, remaining_pct, tp_hits, realized_gross_usd, fees_usd,
+                                      realized_net_usd, return_on_margin_pct, closed_at, duration_hours,
+                                      last_evaluated_open_time, has_data_gap, id
+                                 FROM public.paper_positions WHERE id = p.id) x) = agg_before,
+                      'T20: aggregates differ after recompute');
+
+  -- guards
+  BEGIN
+    PERFORM public.paper_recompute_position((pg_temp.sig('BADUSDT','LONG',1, 100,101,105,110,115)).id);
+    RAISE EXCEPTION 'T20: recompute of a REJECTED position must fail';
+  EXCEPTION WHEN raise_exception THEN
+    IF SQLERRM LIKE 'T20:%' THEN RAISE; END IF;
+  END;
+  q := pg_temp.sig('BTCUSDT','LONG',1, 80000,78800,81200,81600,82000, 40,40,20, 1, NULL, b + interval '10 hours');
+  BEGIN
+    PERFORM public.paper_recompute_position(p.id);
+    RAISE EXCEPTION 'T20: recompute must fail while the symbol has another OPEN position';
+  EXCEPTION WHEN raise_exception THEN
+    IF SQLERRM LIKE 'T20:%' THEN RAISE; END IF;
+  END;
 """)

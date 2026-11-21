@@ -10,8 +10,8 @@ Supabase (PL/pgSQL); N8N only moves data and the dashboard only displays it.
 | 0 | Back up / export `telegram_signals` | P-29 | user |
 | 1 | `001_schema.sql` | P-02 | **ready** |
 | 2 | `002_signal_ingest.sql` | P-04 | **ready** |
-| 3 | `003_engine.sql` | P-08 … P-15 (P-21 recompute is added in Part 5) | **ready (Parts 3–4)** |
-| 4 | `004_analytics.sql` | P-17 … P-20, P-28 | planned (Part 5) |
+| 3 | `003_engine.sql` | P-08 … P-15 | **ready (Parts 3–4)** |
+| 4 | `004_analytics.sql` | P-17 … P-21, P-28 | **ready** |
 | 5 | `005_security.sql` | P-23 | planned (Part 6) |
 
 Every file is idempotent — re-running is safe. After each step run the check below.
@@ -155,6 +155,42 @@ select id, symbol, last_evaluated_open_time from paper_positions
  where status = 'OPEN' and coalesce(last_evaluated_open_time, eval_start_open_time)
        < now() - interval '3 hours';                                   -- should be empty
 ```
+
+## Part 5 — History and analytics: deployment (U)
+
+Run `004_analytics.sql` (after 001–003). Nothing changes in N8N.
+
+| Object | What it is | Who may use it |
+|---|---|---|
+| `paper_positions_v` | positions + `closed_date_local`, `outcome` (WIN/LOSS/BREAKEVEN), `avg_exit_price`, `price_move_pct`, `partially_realized_net_usd`, `indicative_unrealized_usd`, `last_price`, `hours_open` | authenticated (read) |
+| `paper_stats(p_from, p_to, p_symbols, p_categories, p_direction, p_tiers)` | one JSON with the P-18 metrics (+ extras: partially realised, indicative unrealised, max drawdown) | authenticated |
+| `paper_daily_pnl(p_month, …filters)` | one row per day of the month, cumulative from 0 | authenticated |
+| `paper_stats_breakdown(p_dimension, p_from, p_to, …filters)` | `paper_stats` per symbol / category / direction / tier, `small_sample` < 20 trades | authenticated |
+| `paper_health_v` | last OK monitor run, stale OPEN positions, data gaps, INTERNAL_ERRORs, signals without a position, `warning` | authenticated (read) |
+| `paper_recompute_position(p_id, p_reason)` | reset a position to OPEN; the next monitor run re-evaluates it | **service_role only** |
+
+Rules (P-20): a trade counts on the day it was **fully closed** in Europe/Sofia.
+Profit already taken on an OPEN position and the indicative unrealised P&L are
+shown separately and never enter any metric. Filters: `NULL` or an empty array = all.
+
+### Quick checks
+```sql
+select public.paper_stats(current_date - 7, current_date);
+select * from public.paper_daily_pnl(current_date);
+select * from public.paper_health_v;
+```
+
+### Recompute (validation / proven rule error only)
+```sql
+select public.paper_recompute_position(<id>, 'why');   -- SQL Editor runs as postgres = allowed
+```
+The previous result is kept in the `OPENED` event under `details -> 'recompute_log'`.
+It refuses SKIPPED/REJECTED positions, and positions whose symbol already has another
+OPEN position (reopening would break the one-open-per-symbol rule).
+
+> **Security note:** until `005_security.sql` (RLS) is applied, the `paper_*` tables are
+> reachable with the anon key through the REST API (Supabase grants table access by
+> default). Apply 005 before sharing the anon key anywhere (e.g. the dashboard).
 
 ## Configuration
 
