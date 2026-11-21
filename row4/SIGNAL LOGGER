@@ -39,6 +39,17 @@ const insertPayload = selectedItems.map(d => {
     tp3:                data.take_profit_3 ?? null,
     suggested_leverage: data.recommended_leverage ?? null,
 
+    // [P-05] Extra fields for the paper-trading engine (all pass through
+    // Row 4 via ...data spreads; null when missing — never block the insert)
+    entry_min:          data.entry_min          ?? null,
+    entry_max:          data.entry_max          ?? null,
+    tp1_allocation:     data.tp1_allocation     ?? null,   // percent (e.g. 40)
+    tp2_allocation:     data.tp2_allocation     ?? null,
+    tp3_allocation:     data.tp3_allocation     ?? null,
+    sl_distance_pct:    data.sl_distance_pct    ?? null,
+    total_score:        data.total_score        ?? null,
+    cycle_timestamp:    data.cycle_timestamp    ?? null,   // ISO string from Row 1
+
     // Analytics field 1: пазарен режим при генерация
     market_condition:   data.market_condition ?? null,
 
@@ -58,12 +69,14 @@ const insertPayload = selectedItems.map(d => {
       total:        data.total_score        ?? null,
       pre_rr_bonus: data.total_score_pre_rr_bonus ?? null,
       rr_bonus:     data.rr_bonus_applied_to_total ?? 0,
+      // [P-05] Weights fix: SCORE AGGREGATOR emits applied_weights (normalized);
+      // the flat weight_* fields do not reach this node, so they stay as fallback only.
       weights: {
-        momentum:     data.weight_momentum     ?? null,
-        trend:        data.weight_trend        ?? null,
-        volatility:   data.weight_volatility   ?? null,
-        volume:       data.weight_volume       ?? null,
-        price_action: data.weight_price_action ?? null
+        momentum:     data.applied_weights?.momentum     ?? data.weight_momentum     ?? null,
+        trend:        data.applied_weights?.trend        ?? data.weight_trend        ?? null,
+        volatility:   data.applied_weights?.volatility   ?? data.weight_volatility   ?? null,
+        volume:       data.applied_weights?.volume       ?? data.weight_volume       ?? null,
+        price_action: data.applied_weights?.price_action ?? data.weight_price_action ?? null
       }
     },
 

@@ -1,0 +1,91 @@
+// =====================================================
+// PAPER CANDLE NORMALIZER v1.0                                   [P-13]
+// Workflow: PAPER MONITOR (separate from the main signal workflow)
+// Position: after "Binance Klines 1h" (HTTP Request), before "Ingest Candles"
+// Mode:     Run Once for All Items
+//
+// Input : one item per symbol from the Binance HTTP node, in the same order
+//         as "Split Out Targets" (HTTP Request keeps item order, also with
+//         batching). The HTTP node must have Options → Response →
+//         "Include Response Headers and Status" = ON, so each item is
+//         { body: [[...klines...]], statusCode, headers }.
+//         With "On Error: Continue" a failed request arrives as { error: ... }.
+// Output: exactly ONE item:
+//         { candles: [...], failed_symbols: [...], requested, candles_count,
+//           dropped_unclosed }
+//
+// No financial logic here — only format conversion and the "closed candle"
+// filter. All evaluation happens in Supabase (paper_evaluate_positions).
+// =====================================================
+
+const TARGETS_NODE = 'Split Out Targets';   // must match the node name on the canvas
+
+const responses = $input.all();
+const targets   = $(TARGETS_NODE).all();
+const nowMs     = Date.now();
+
+const candles = [];
+const failed  = [];
+let droppedUnclosed = 0;
+
+responses.forEach((item, i) => {
+  // pairedItem is the most reliable link back to the request; index is the fallback
+  const srcIndex = item.pairedItem?.item ?? i;
+  const target   = targets[srcIndex]?.json ?? {};
+  const symbol   = target.symbol;
+
+  if (!symbol) {
+    console.log(`NORMALIZER: response #${i} has no matching target — skipped`);
+    return;
+  }
+
+  const j = item.json ?? {};
+  const status = j.statusCode ?? (j.error ? 'n/a' : 200);
+  const body = Array.isArray(j.body) ? j.body
+             : Array.isArray(j.data) ? j.data
+             : null;
+
+  if (j.error || status !== 200 || body === null) {
+    failed.push(symbol);
+    console.log(`NORMALIZER: ${symbol} failed (status ${status}) ${j.error?.message ?? j.error ?? ''}`);
+    return;
+  }
+
+  for (const k of body) {
+    // Binance kline: [openTime, open, high, low, close, volume, closeTime, ...]
+    if (!Array.isArray(k) || k.length < 7) continue;
+    const openMs  = Number(k[0]);
+    const closeMs = Number(k[6]);
+    if (!Number.isFinite(openMs) || !Number.isFinite(closeMs)) continue;
+
+    // only CLOSED candles: close_time must be in the past
+    if (closeMs >= nowMs) { droppedUnclosed++; continue; }
+
+    candles.push({
+      symbol,
+      open_time:  new Date(openMs).toISOString(),
+      close_time: new Date(closeMs).toISOString(),
+      // keep Binance strings as-is: Postgres numeric parses them without float loss
+      open:   String(k[1]),
+      high:   String(k[2]),
+      low:    String(k[3]),
+      close:  String(k[4]),
+      volume: String(k[5])
+    });
+  }
+});
+
+console.log(
+  `NORMALIZER: ${responses.length} responses, ${candles.length} closed candles, ` +
+  `${droppedUnclosed} unclosed dropped, failed: ${failed.length ? failed.join(', ') : 'none'}`
+);
+
+return [{
+  json: {
+    candles,
+    failed_symbols:   failed,
+    requested:        targets.length,
+    candles_count:    candles.length,
+    dropped_unclosed: droppedUnclosed
+  }
+}];

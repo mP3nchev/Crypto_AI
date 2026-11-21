@@ -1,0 +1,132 @@
+// =====================================================
+// N8N WORKFLOW: PAPER MONITOR                                [P-13]
+// A NEW, separate workflow (not part of the main signal workflow).
+// A failure here never affects signals or Telegram, and vice versa.
+//
+// NOTE: these are N8N UI settings, not a Code node — except
+//       "PAPER CANDLE NORMALIZER", whose code is in monitor/PAPER CANDLE NORMALIZER.
+// Requires 003_engine.sql (Part 4 section) in Supabase.
+// =====================================================
+
+// ── 0. WORKFLOW SETTINGS ──────────────────────────────
+//
+// Name:             PAPER MONITOR
+// Settings → Timezone:        Europe/Sofia
+// Settings → Execution Order: v1 (recommended)
+// Credential:  reuse "Supabase service_role (crypto)" (Custom Auth, see
+//              row4/SUPABASE SIGNAL INSERT — N8N CONFIG, section 0).
+// Base URL below: https://<PROJECT_REF>.supabase.co/rest/v1
+//
+// Canvas:
+//
+//   Schedule (HH:05)
+//     → Get Targets            (HTTP POST rpc/paper_get_monitor_targets)
+//     → Has Targets?           (IF count > 0)        false → end
+//     → Split Out Targets      (Split Out: targets)
+//     → Binance Klines 1h      (HTTP GET, per symbol)
+//     → PAPER CANDLE NORMALIZER (Code, all items → 1 item)
+//     → Ingest Candles         (HTTP POST rpc/paper_ingest_candles)
+//     → Evaluate Positions     (HTTP POST rpc/paper_evaluate_positions)
+//     → Notify?                (IF notify && events)  false → end
+//     → Split Out Events → Telegram Exit Message
+
+// ── 1. Schedule Trigger ───────────────────────────────
+// Trigger Interval: Hours · Hours Between Triggers: 1 · Trigger at Minute: 5
+// (~720 executions / month. If the N8N quota is too small, use every 2 hours:
+//  the cursor catches up all missed candles, results are identical — spec 2.2.)
+
+// ── 2. HTTP Request: "Get Targets" ────────────────────
+// Method: POST
+// URL:    {BASE}/rpc/paper_get_monitor_targets
+// Authentication: Generic Credential Type → Custom Auth → Supabase service_role (crypto)
+// Headers: Content-Type: application/json
+// Body (JSON): {}
+// Response: one item → { "count": 2, "targets": [ {"symbol":"BTCUSDT","start_time_ms":1763722800000}, ... ] }
+// Settings → Retry On Fail: ON, Max Tries 3, Wait 2000 ms
+
+// ── 3. IF: "Has Targets?" ─────────────────────────────
+// Condition (Number): {{ $json.count }}  is greater than  0
+// TRUE  → Split Out Targets
+// FALSE → (unconnected) — execution ends, nothing to monitor
+
+// ── 4. Split Out: "Split Out Targets" ─────────────────
+// Field To Split Out: targets
+// Include: No Other Fields
+// Output: one item per symbol → { symbol, start_time_ms }
+// The node NAME must be exactly "Split Out Targets" (the normalizer reads it).
+
+// ── 5. HTTP Request: "Binance Klines 1h" ──────────────
+// Method: GET
+// URL:    https://api.binance.com/api/v3/klines
+// Send Query Parameters (Using Fields Below):
+//   symbol    = {{ $json.symbol }}
+//   interval  = 1h
+//   startTime = {{ $json.start_time_ms }}
+//   limit     = 1000
+// Authentication: None (public endpoint — same host as the main workflow)
+// Options:
+//   Batching:  Items per Batch 5 · Batch Interval 1000 ms   (5 requests / second)
+//   Response → Include Response Headers and Status: ON     (REQUIRED by the normalizer)
+//   Response → Response Format: JSON
+//   Timeout: 15000 ms
+// Settings:
+//   Retry On Fail: ON · Max Tries 3 · Wait Between Tries 2000 ms
+//   On Error: Continue   (one bad symbol must not stop the run;
+//                         it is reported in failed_symbols → run status PARTIAL)
+
+// ── 6. Code: "PAPER CANDLE NORMALIZER" ────────────────
+// Mode: Run Once for All Items · Language: JavaScript
+// Code: paste monitor/PAPER CANDLE NORMALIZER
+// Output: ONE item { candles: [...], failed_symbols: [...], requested, candles_count, dropped_unclosed }
+
+// ── 7. HTTP Request: "Ingest Candles" ─────────────────
+// Method: POST
+// URL:    {BASE}/rpc/paper_ingest_candles
+// Authentication: Custom Auth → Supabase service_role (crypto)
+// Headers: Content-Type: application/json
+// Body Content Type: JSON · Specify Body: Using JSON
+// JSON (expression):
+//   {{ JSON.stringify({ p_candles: $json.candles }) }}
+// Response: { "received": n, "valid": n, "inserted": n, "updated": n }
+// Settings → Retry On Fail: ON, Max Tries 3, Wait 2000 ms
+// (Safe to retry: upsert by symbol + open_time.)
+
+// ── 8. HTTP Request: "Evaluate Positions" ─────────────
+// Method: POST
+// URL:    {BASE}/rpc/paper_evaluate_positions
+// Authentication: Custom Auth → Supabase service_role (crypto)
+// Headers: Content-Type: application/json
+// JSON (expression):
+//   {{ JSON.stringify({ p_failed_symbols: $('PAPER CANDLE NORMALIZER').first().json.failed_symbols }) }}
+// Response: { status: OK|PARTIAL|ERROR|SKIPPED_LOCKED, run_id, evaluated, candles_used,
+//             events_created, closed, events: [...], notify_telegram_on_exit, errors: [...] }
+// Settings → Retry On Fail: OFF  (a second call while the first still runs would just
+//            return SKIPPED_LOCKED; the next hourly run catches up anyway)
+// The function never raises: problems come back as status PARTIAL / ERROR and are
+// stored in paper_monitor_runs.
+
+// ── 9. IF: "Notify?" (optional exit notifications) ────
+// Condition (Boolean): {{ $json.notify_telegram_on_exit === true && $json.events.length > 0 }}  is true
+// Controlled in Supabase:  update paper_config set notify_telegram_on_exit = true where id = 1;
+// TRUE  → Split Out Events
+// FALSE → (unconnected)
+
+// ── 10. Split Out: "Split Out Events" → Telegram: "Telegram Exit Message" ──
+// Split Out field: events
+// Telegram node: same bot credential / chat as the main workflow
+// Text (expression):
+//   📄 PAPER {{ $json.symbol }} {{ $json.direction }} — {{ $json.event_type }}
+//   @ {{ Number($json.fill_price) }} | net {{ Number($json.net_usd).toFixed(2) }} $
+// Settings → On Error: Continue  (a Telegram failure must not mark the run failed)
+
+// ── 11. FIRST RUN CHECK (U) ───────────────────────────
+// With at least one OPEN paper position (after a real signal, or a test signal):
+//   1. Execute the workflow manually.
+//   2. Get Targets shows count ≥ 1; Binance returns 200; normalizer logs candles.
+//   3. In Supabase:
+//        select * from paper_monitor_runs order by id desc limit 3;        -- a new row, status OK
+//        select symbol, count(*), max(open_time) from paper_candles group by 1;
+//        select id, symbol, status, last_evaluated_open_time, tp_hits, remaining_pct
+//          from paper_positions where status in ('OPEN','CLOSED') order by id desc limit 10;
+//   4. Execute again immediately: no new events, candles_used = 0 (idempotent).
+// Then activate the workflow (toggle "Active").

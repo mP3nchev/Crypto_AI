@@ -1,9 +1,10 @@
 // SORT & SELECT TOP N - EXCLUDE STABLE COINS
 
 // =====================================================
-// LIMIT — change to switch between production (20) and manual verification (5)
+// LIMIT — production value is 20 (change to 5 only for manual verification cycles)
+// [P-01] Restored to 20 so the paper-trading test measures the real configuration.
 // =====================================================
-const LIMIT = 5;  // TODO: revert to 20 after manual-calc verification cycle
+const LIMIT = 20;
 
 console.log(`🚫 Filtering out stable coins before sorting (LIMIT=${LIMIT})...`);
 

@@ -1,0 +1,64 @@
+# Paper trading — SQL tests
+
+Each file is self-contained, runs inside `BEGIN … ROLLBACK`, and aborts with
+`RAISE EXCEPTION '<description>'` on any mismatch. A passing test ends with a
+`NOTICE: Txx PASSED`.
+
+**Run them only in a Supabase branch or a separate test project — never in production.**
+(They insert temporary rows; the final `ROLLBACK` removes them, but T00 also
+touches `paper_config` inside the transaction.)
+
+## Run everything at once (recommended)
+```bash
+PGHOST=localhost PGUSER=postgres PGPASSWORD=… supabase/paper_trading/tests/run_all.sh
+```
+It creates and drops its own scratch database (`paper_test`), applies `001…006` twice, runs every
+`Txx` file and `concurrency_test.sh`. It refuses to use `postgres`, `template*`, `prod*`.
+`tools/supabase_roles.sql` recreates the `anon / authenticated / service_role` roles and Supabase's
+default grants on a plain PostgreSQL. Use it only there — a Supabase project already has them.
+
+## How to run a single test
+1. Apply `../001_schema.sql` … `../005_security.sql` to the test project (T23 needs 005, T24 needs 006; all others work with or without them).
+2. Supabase → SQL Editor → paste one test file → Run.
+3. Expect `NOTICE: Txx PASSED`. Any `ERROR: Txx: …` is a failure — do not skip it; report it.
+
+## Index
+| File | Part | Checks |
+|---|---|---|
+| `T00_schema_structure.sql` | P-02 | tables, column counts, single config row, indexes, seeds, config_version trigger, event/open-symbol uniqueness |
+| `T00b_signal_ingest.sql` | P-04 | new columns, unique `(scan_cycle_id, symbol)`, idempotent re-insert, payload types |
+| `T00c_open_formulas.sql` | P-09, P-10 | Examples 1–2 at open (fill, notional, qty, liquidation 132.57), L=20 capped stop (T08 open part), leverage clamp, category, next-full-hour eval start (T13 open part) |
+| `T09_duplicate_open.sql` | P-08 | duplicate per symbol (any direction), duplicate inside one insert, reopen after close, 1:1 |
+| `T10_validation.sql` | P-08 | direction, levels, order, allocations (default / tolerance / partial), missing TP2/TP3, stale 46 vs 44 min, unknown tier |
+| `T16_trigger_error.sql` | P-08 | forced engine error: signal saved, REJECTED `INTERNAL_ERROR`, ERROR event |
+| `T18_sizing.sql` | P-09 | PERCENT_EQUITY on 1000 and 1200 equity, INSUFFICIENT_VIRTUAL_BALANCE |
+| `T19_max_open.sql` | P-08 | MAX_OPEN_POSITIONS, PAPER_DISABLED |
+| `T01_example_1a.sql` | P-14–P-16 | Example 1a: TP1 then SL → −1.22 $, −2.45 %, `TP1+SL` |
+| `T02_ambiguous_candle.sql` | P-14 | Example 1b: SL wins in an ambiguous candle → −4.27 $ |
+| `T03_example_2_short.sql` | P-14–P-16 | Example 2: SHORT, TP1/2/3 → +2.02/+2.47/+1.73, +6.23 $, +12.45 % |
+| `T04_two_tps_one_candle.sql` | P-14 | TP1 + TP2 in one candle, 20 % remaining |
+| `T05_gap_through_sl.sql` | P-14 | open below SL → fill at open with slippage |
+| `T06_timeout_data_unavailable.sql` | P-14 | TIMEOUT in the candle where 72 h elapse; DATA_UNAVAILABLE (entry_fill / last close); 90 h stays OPEN |
+| `T07_breakeven.sql` | P-14 | BE armed in TP1 candle, BREAKEVEN_SL in the next |
+| `T08_liquidation.sql` | P-14, P-15 | L=20: LIQUIDATION −50 $ (100 %), −30 $ for the remaining 60 % |
+| `T11_idempotency.sql` | P-13, P-14 | ingest/evaluate twice change nothing; invalid candle dropped; correction = update; PARTIAL on failed symbol and on a broken position |
+| `T12_future_candle.sql` | P-13, P-14 | unclosed candle ignored by evaluate and ingest |
+| `T13_partial_first_hour.sql` | P-10, P-14 | signal at 10:14 → the 10:00 candle is not counted |
+| `T14_catch_up_and_targets.sql` | P-12, P-14 | targets (empty / eval start / cursor + 1 h), 10-candle catch-up, DATA_GAP once |
+| `T15_lock_held.sql` | P-14 | lock held → SKIPPED_LOCKED, no changes |
+| `T17_stats.sql` | P-17–P-20 | exact metrics for a defined set; 23:30 UTC trade falls on the **next** Sofia day; filters; empty range; daily rows for every day; daily sum = monthly stats; breakdown; determinism |
+| `T17b_view_and_health.sql` | P-17, P-20, P-28 | partially realised / indicative unrealised (not in metrics), weighted avg exit, price move, health warnings |
+| `T20_recompute.sql` | P-21 | recompute → evaluate gives identical events and aggregates; audit log; guards |
+| `T24_dashboard_rpcs.sql` | P-22, P-24 | portfolio summary (account-level equity, filtered exposure and 24 h counts), month overview (green/red/best/worst, empty month), symbols |
+| `T23_security.sql` | P-23 | access matrix after 005: anon denied everywhere; authenticated read-only (view, stats, health) and denied writes / evaluate / recompute; service_role inserts (trigger opens the position) and runs the monitor RPCs |
+
+**T15 note:** advisory locks are re-entrant inside one session, so the test simulates
+"lock held" by replacing `paper_try_monitor_lock()` inside the transaction. The real
+two-session behaviour was also verified manually (second session → `SKIPPED_LOCKED`).
+
+**Regenerating:** `T00c` and `T01`–`T19` are generated by `tools/generate_tests.py`
+(shared prelude). Edit the generator, then run `python3 tests/tools/generate_tests.py`.
+
+Every `Txx` file starts with the same prelude: it empties the paper tables and `telegram_signals` and
+resets `paper_config` to defaults **inside the transaction**, so results do not
+depend on existing data. The final `ROLLBACK` restores everything.
