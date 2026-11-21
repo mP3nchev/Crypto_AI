@@ -13,6 +13,7 @@ Supabase (PL/pgSQL); N8N only moves data and the dashboard only displays it.
 | 3 | `003_engine.sql` | P-08 … P-15 | **ready (Parts 3–4)** |
 | 4 | `004_analytics.sql` | P-17 … P-21, P-28 | **ready** |
 | 5 | `005_security.sql` | P-23 | **ready** — read the warning below first |
+| 6 | `006_dashboard.sql` | P-22, P-24 (dashboard aggregates) | **ready** |
 
 Every file is idempotent — re-running is safe. After each step run the check below.
 `001_schema.sql` stops with a clear error if `public.telegram_signals` does not
@@ -225,6 +226,16 @@ Both must return an error such as `permission denied for table …` (HTTP 401/40
 
 `tests/T23_security.sql` checks the full access matrix (anon / authenticated / service_role)
 with `SET ROLE` in a test project or branch.
+
+## Part 6 — Dashboard: deployment (U)
+
+1. Run `006_dashboard.sql` (after 005). It adds three read-only functions for the design:
+   `paper_portfolio_summary` (header KPIs: equity, exposure, indicative P&L, signals 24 h),
+   `paper_month_overview` (calendar banner: month stats, green/red days, best/worst day)
+   and `paper_symbols` (filter options). Granted to `authenticated`, never `anon`.
+2. Supabase Auth: magic link on, sign-ups **off**, exactly one invited user,
+   Site URL = dashboard URL.
+3. Deploy `dashboard/` (Netlify or Vercel) — see `dashboard/README.md`.
 
 ## Configuration
 

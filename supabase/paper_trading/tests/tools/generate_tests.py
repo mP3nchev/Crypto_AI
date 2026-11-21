@@ -76,7 +76,7 @@ def write(name, part, title, body):
     hdr=f'''-- =====================================================================
 -- {name} — {title}
 -- Spec: {part}. Run in a TEST project/branch only (see tests/README.md).
--- Prerequisites: 001 … 004 (T23: also 005). Ends with ROLLBACK; aborts on any mismatch.
+-- Prerequisites: 001 … 004 (T23: 005, T24: 006). Ends with ROLLBACK; aborts on any mismatch.
 -- =====================================================================
 '''
     open(os.path.join(D,name+'.sql'),'w').write(hdr+PRE+'\nDO $$\n'+body.strip('\n')+f"\n\n  RAISE NOTICE '{name.split('_')[0]} PASSED: {title}';\nEND $$;\n\nROLLBACK;\n")
@@ -926,4 +926,39 @@ BEGIN
     'T23: unexpected access matrix: ' || v_results::text);
   PERFORM pg_temp.chk((SELECT status FROM public.paper_positions WHERE signal_id = v_sig) = 'OPEN',
                       'T23: service_role insert must open a position via the trigger');
+""")
+
+# ======================= PART 6 (dashboard RPCs) =======================
+write('T24_dashboard_rpcs','P-22, P-24 (006_dashboard.sql)','portfolio summary, month overview, symbols', T17_DECL + T17_SETUP + """
+  -- portfolio summary: equity is account level = 1000 + 17.005 (all closed)
+  s := public.paper_portfolio_summary();
+  PERFORM pg_temp.chk((s->>'equity_usd')::numeric = 1017.005 AND (s->>'realized_net_usd')::numeric = 17.005,
+                      'T24: equity ' || s::text);
+  PERFORM pg_temp.chk((s->>'equity_return_pct')::numeric = 1.7005, 'T24: equity return');
+  PERFORM pg_temp.chk((s->>'open_positions')::int = 1 AND (s->>'open_margin_usd')::numeric = 50
+                  AND (s->>'open_notional_usd')::numeric = 50, 'T24: open exposure');
+  PERFORM pg_temp.chk(pg_temp.near((s->>'exposure_pct')::numeric, 50 / 1017.005 * 100, 1e-9), 'T24: exposure %');
+  -- the CLOSED test positions were created "now" by the trigger -> 24h counts
+  PERFORM pg_temp.chk((s->>'signals_24h')::int = 7 AND (s->>'opened_24h')::int = 6 AND (s->>'rejected_24h')::int = 1,
+                      'T24: 24h counts ' || s::text);
+  -- filters apply to open/24h, not to equity
+  s := public.paper_portfolio_summary(p_direction => 'SHORT');
+  PERFORM pg_temp.chk((s->>'equity_usd')::numeric = 1017.005 AND (s->>'open_positions')::int = 0
+                  AND s->'indicative_unrealized_pct' = 'null'::jsonb, 'T24: filtered summary');
+
+  -- month overview
+  s := public.paper_month_overview('2026-11-17');
+  PERFORM pg_temp.chk(s->>'month' = '2026-11-01' AND (s->'stats'->>'trades')::int = 5, 'T24: month stats');
+  PERFORM pg_temp.chk((s->>'trading_days')::int = 2 AND (s->>'green_days')::int = 1 AND (s->>'red_days')::int = 1,
+                      'T24: green/red days ' || s::text);
+  PERFORM pg_temp.chk((s->>'best_day_net_usd')::numeric = 25.005 AND s->>'best_day' = '2026-11-05'
+                  AND (s->>'worst_day_net_usd')::numeric = -8 AND s->>'worst_day' = '2026-11-06'
+                  AND (s->>'max_abs_day_net_usd')::numeric = 25.005, 'T24: best/worst');
+  s := public.paper_month_overview('2026-10-01');
+  PERFORM pg_temp.chk((s->>'trading_days')::int = 0 AND s->'best_day' = 'null'::jsonb
+                  AND (s->>'max_abs_day_net_usd')::numeric = 0, 'T24: empty month');
+
+  -- symbols
+  PERFORM pg_temp.chk((SELECT count(*) FROM public.paper_symbols()) = 7, 'T24: symbol count');
+  PERFORM pg_temp.chk((SELECT category FROM public.paper_symbols() WHERE symbol = 'BTCUSDT') = 'BTC', 'T24: symbol category');
 """)

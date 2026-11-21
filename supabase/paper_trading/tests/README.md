@@ -9,7 +9,7 @@ Each file is self-contained, runs inside `BEGIN … ROLLBACK`, and aborts with
 touches `paper_config` inside the transaction.)
 
 ## How to run
-1. Apply `../001_schema.sql` … `../005_security.sql` to the test project (T23 needs 005; all others work with or without it).
+1. Apply `../001_schema.sql` … `../005_security.sql` to the test project (T23 needs 005, T24 needs 006; all others work with or without them).
 2. Supabase → SQL Editor → paste one test file → Run.
 3. Expect `NOTICE: Txx PASSED`. Any `ERROR: Txx: …` is a failure — do not skip it; report it.
 
@@ -40,6 +40,7 @@ touches `paper_config` inside the transaction.)
 | `T17_stats.sql` | P-17–P-20 | exact metrics for a defined set; 23:30 UTC trade falls on the **next** Sofia day; filters; empty range; daily rows for every day; daily sum = monthly stats; breakdown; determinism |
 | `T17b_view_and_health.sql` | P-17, P-20, P-28 | partially realised / indicative unrealised (not in metrics), weighted avg exit, price move, health warnings |
 | `T20_recompute.sql` | P-21 | recompute → evaluate gives identical events and aggregates; audit log; guards |
+| `T24_dashboard_rpcs.sql` | P-22, P-24 | portfolio summary (account-level equity, filtered exposure and 24 h counts), month overview (green/red/best/worst, empty month), symbols |
 | `T23_security.sql` | P-23 | access matrix after 005: anon denied everywhere; authenticated read-only (view, stats, health) and denied writes / evaluate / recompute; service_role inserts (trigger opens the position) and runs the monitor RPCs |
 
 **T15 note:** advisory locks are re-entrant inside one session, so the test simulates

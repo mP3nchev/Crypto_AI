@@ -1,7 +1,7 @@
 -- =====================================================================
 -- T14_catch_up_and_targets — catch-up of 10 hours, targets, data gap
 -- Spec: P-12, P-14, P-28. Run in a TEST project/branch only (see tests/README.md).
--- Prerequisites: 001 … 004 (T23: also 005). Ends with ROLLBACK; aborts on any mismatch.
+-- Prerequisites: 001 … 004 (T23: 005, T24: 006). Ends with ROLLBACK; aborts on any mismatch.
 -- =====================================================================
 BEGIN;
 

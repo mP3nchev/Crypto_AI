@@ -1,7 +1,7 @@
 -- =====================================================================
 -- T06_timeout_data_unavailable — TIMEOUT at 72h, DATA_UNAVAILABLE
 -- Spec: P-14 steps 8 and after-loop. Run in a TEST project/branch only (see tests/README.md).
--- Prerequisites: 001 … 004 (T23: also 005). Ends with ROLLBACK; aborts on any mismatch.
+-- Prerequisites: 001 … 004 (T23: 005, T24: 006). Ends with ROLLBACK; aborts on any mismatch.
 -- =====================================================================
 BEGIN;
 

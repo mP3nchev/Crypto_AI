@@ -1,7 +1,7 @@
 -- =====================================================================
 -- T00c_open_formulas — open-time formulas, leverage clamp, category, eval start
 -- Spec: P-09, P-10. Run in a TEST project/branch only (see tests/README.md).
--- Prerequisites: 001 … 004 (T23: also 005). Ends with ROLLBACK; aborts on any mismatch.
+-- Prerequisites: 001 … 004 (T23: 005, T24: 006). Ends with ROLLBACK; aborts on any mismatch.
 -- =====================================================================
 BEGIN;
 

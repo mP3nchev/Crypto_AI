@@ -1,7 +1,7 @@
 -- =====================================================================
 -- T08_liquidation — L=20, SL beyond liquidation
 -- Spec: P-10, P-14, P-15. Run in a TEST project/branch only (see tests/README.md).
--- Prerequisites: 001 … 004 (T23: also 005). Ends with ROLLBACK; aborts on any mismatch.
+-- Prerequisites: 001 … 004 (T23: 005, T24: 006). Ends with ROLLBACK; aborts on any mismatch.
 -- =====================================================================
 BEGIN;
 
