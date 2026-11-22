@@ -22,6 +22,10 @@ ALLOWED=(
   # Added later, on purpose, after a production timeout in Row 2 (ECONNABORTED on ~960 single
   # POSTs): a NEW additive node; no existing Row 2 file is modified.
   "row2/CANDLE BATCHER FOR UPSERT"
+  # TAAPI v1 -> v2 migration (the user's key is a v2 key; v1 endpoint rejects it). Output fields of the
+  # processor are unchanged; scripts/test_taapi_v2_adapter.js proves it.
+  "row2/Separation of Requests"
+  "row2/TAAPI RESPONSE PROCESSOR"
 )
 
 FAIL=0
@@ -48,6 +52,9 @@ if [ -n "$unexpected" ]; then echo "  FAIL: unexpected removed lines:"; echo "$u
 echo "== SIGNAL LOGGER: behaviour old vs new"
 git show "$BASE:row4/SIGNAL LOGGER" > "${TMPDIR:-/tmp}/signal_logger_old.js"
 node scripts/test_signal_logger_regression.js "${TMPDIR:-/tmp}/signal_logger_old.js" "row4/SIGNAL LOGGER" || FAIL=1
+
+echo "== TAAPI v2 adapter (Row 2): request shape + same output fields as v1"
+node scripts/test_taapi_v2_adapter.js || FAIL=1
 
 echo
 [ "$FAIL" = 0 ] && echo "PIPELINE REGRESSION: OK" || { echo "PIPELINE REGRESSION: FAILED"; exit 1; }

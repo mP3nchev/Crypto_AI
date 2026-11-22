@@ -2,15 +2,25 @@
 const validItems = $input.all().filter(item => !item.json.exclude_from_taapi);
 
 // =====================================================
-// TAAPI SECRET KEY — intentionally NOT here.
+// TAAPI v2 MIGRATION                                       (was v1: api.taapi.io)
 //
-// Free N8N Cloud does not support $env variables. The secret is
-// configured directly in the downstream HTTP Request node body
-// (N8N canvas → body parameter "secret"). This keeps the key out
-// of git-tracked code while storing it in N8N Cloud's encrypted DB.
+// v2 API (verified on the user's account with a live test):
+//   POST https://v2.taapi.io/bulk
+//   Header   Authorization: Bearer <API KEY>      <- NOT in the body any more
+//   Body     { "constructs": [ { id, exchange, symbol, timeframe, indicators: [ { id, indicator, period?, backtrack? } ] } ] }
+//   Response { "<construct id>": { "<indicator id>": { value:[..] | valueMACD:[..] | valueFastK:[..], timestamp:[..] } } }
 //
-// Canvas HTTP Request node body must be:
-//   { "secret": "<your_taapi_key>", "construct": {{ $json.construct }} }
+// The API key must NOT be in this code or in the node text. Create an N8N credential:
+//   Credentials -> New -> "Header Auth"   Name: Authorization   Value: Bearer <API KEY>
+// and select it in the HTTP POST TAAPI BULK node (Authentication -> Generic -> Header Auth).
+//
+// HTTP POST TAAPI BULK node:
+//   Method POST · URL https://v2.taapi.io/bulk · Body: JSON · Specify Body: Using JSON
+//   JSON Body (expression):   {{ JSON.stringify({ constructs: $json.constructs }) }}
+//
+// Construct / indicator ids are what TAAPI RESPONSE PROCESSOR reads back:
+//   construct id = "<SYMBOL>_<timeframe>"   e.g. BTCUSDT_2h      indicator id = e.g. rsi, macd, ema200
+// Keep the ids in sync with TAAPI RESPONSE PROCESSOR (scripts/test_taapi_v2_adapter.js checks it).
 // =====================================================
 
 // =====================================================
@@ -45,6 +55,10 @@ if (!scan_cycle_id) {
 console.log(`Cycle ID: ${scan_cycle_id}`);
 console.log(`Cycle timestamp: ${cycle_timestamp}`);
 
+// backtrack: 1 = last CLOSED candle. If the live test shows it must sit on the construct, not the
+// indicator, only the `ind` helper and one line in each construct need to move.
+const BACKTRACK = 1;
+
 let allRequests = [];
 let processedCount = 0;
 let skippedCount = 0;
@@ -70,64 +84,64 @@ for (let i = 0; i < inputItems.length; i++) {
 
   console.log(`Processing ${i + 1}/${inputItems.length}: ${symbol}`);
 
-  const symbolTaapi = symbol.replace(/USDT$/, '/USDT');
+  // v2 symbol format has no slash: BTCUSDT (verified live)
+  const symbolTaapi = symbol;
 
-  const constructA = [
+  // `period` replaces v1 "optInTimePeriod". backtrack:1 = evaluate the last CLOSED candle
+  // (same meaning as v1). macd / vwap / obv / bbw / stochrsi use TAAPI defaults, exactly as the
+  // v1 request effectively did (the v1 2h macd extra params did not apply to macd).
+  const ind = (id, indicator, period) => {
+    const o = { id, indicator, backtrack: BACKTRACK };
+    if (period !== undefined) o.period = period;
+    return o;
+  };
+
+  const constructs = [
     {
-      exchange: "binance",
-      symbol: symbolTaapi,
-      interval: "2h",
-      backtrack: 1,
+      id: `${symbol}_2h`, exchange: "binance", symbol: symbolTaapi, timeframe: "2h",
       indicators: [
-        { id: `${symbol}_rsi_2h`,     indicator: "rsi",      optInTimePeriod: 14 },
-        { id: `${symbol}_macd_2h`,    indicator: "macd",     optInTimePeriod: 14, optInFastKPeriod: 3, optInFastDPeriod: 3 },
-        { id: `${symbol}_adx_2h`,     indicator: "adx",      optInTimePeriod: 14 },
-        { id: `${symbol}_ema200_2h`,  indicator: "ema",      optInTimePeriod: 200 },
-        { id: `${symbol}_stochrsi_2h`,indicator: "stochrsi", optInTimePeriod: 14, optInFastKPeriod: 3, optInFastDPeriod: 3 },
-        { id: `${symbol}_willr_2h`,   indicator: "willr",    optInTimePeriod: 14 },
-        { id: `${symbol}_mfi_2h`,     indicator: "mfi",      optInTimePeriod: 14 },
-        { id: `${symbol}_ema20_2h`,   indicator: "ema",      optInTimePeriod: 20 },
-        { id: `${symbol}_ema50_2h`,   indicator: "ema",      optInTimePeriod: 50 }
+        ind('rsi', 'rsi', 14),
+        ind('macd', 'macd'),
+        ind('adx', 'adx', 14),
+        ind('ema200', 'ema', 200),
+        ind('stochrsi', 'stochrsi'),
+        ind('willr', 'willr', 14),
+        ind('mfi', 'mfi', 14),
+        ind('ema20', 'ema', 20),
+        ind('ema50', 'ema', 50)
       ]
     },
     {
-      exchange: "binance",
-      symbol: symbolTaapi,
-      interval: "1h",
-      backtrack: 1,
+      id: `${symbol}_1h`, exchange: "binance", symbol: symbolTaapi, timeframe: "1h",
       indicators: [
-        { id: `${symbol}_rsi_1h`,     indicator: "rsi",      optInTimePeriod: 14 },
-        { id: `${symbol}_macd_1h`,    indicator: "macd" },
-        { id: `${symbol}_vwap_1h`,    indicator: "vwap" },
-        { id: `${symbol}_obv_1h`,     indicator: "obv" },
-        { id: `${symbol}_atr_1h`,     indicator: "atr",      optInTimePeriod: 14 },
-        { id: `${symbol}_bbw_1h`,     indicator: "bbw" },
-        { id: `${symbol}_ema20_1h`,   indicator: "ema",      optInTimePeriod: 20 },
-        { id: `${symbol}_ema50_1h`,   indicator: "ema",      optInTimePeriod: 50 },
-        { id: `${symbol}_stochrsi_1h`,indicator: "stochrsi" }
+        ind('rsi', 'rsi', 14),
+        ind('macd', 'macd'),
+        ind('vwap', 'vwap'),
+        ind('obv', 'obv'),
+        ind('atr', 'atr', 14),
+        ind('bbw', 'bbw'),
+        ind('ema20', 'ema', 20),
+        ind('ema50', 'ema', 50),
+        ind('stochrsi', 'stochrsi')
       ]
     },
     {
-      exchange: "binance",
-      symbol: symbolTaapi,
-      interval: "15m",
-      backtrack: 1,
+      id: `${symbol}_15m`, exchange: "binance", symbol: symbolTaapi, timeframe: "15m",
       indicators: [
-        { id: `${symbol}_willr_15m`, indicator: "willr" },
-        { id: `${symbol}_rsi_15m`,   indicator: "rsi",  optInTimePeriod: 14 }
+        ind('willr', 'willr', 14),
+        ind('rsi', 'rsi', 14)
       ]
     }
   ];
 
   allRequests.push({
     json: {
-      // secret is NOT passed here — lives in HTTP Request node body only
-      construct: constructA,
+      // API key is NOT passed here — it lives in the N8N credential (Header Auth)
+      constructs: constructs,
       symbol: symbol,
       symbol_id: symbol_id,
       cycle_timestamp: cycle_timestamp,
       scan_cycle_id: scan_cycle_id,
-      request_type: 'A',
       sma_20: sma_20,
       original_scan_data: original_scan_data
     }
