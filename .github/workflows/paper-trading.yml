@@ -52,7 +52,7 @@ jobs:
         with:
           node-version: 22
       - name: Only allowed files changed, SIGNAL LOGGER behaviour unchanged
-        run: scripts/check_pipeline_regression.sh "$(git merge-base origin/main HEAD)"
+        run: scripts/check_pipeline_regression.sh
 
   dashboard:
     name: Dashboard (types, unit tests, build)

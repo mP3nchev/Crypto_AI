@@ -4,11 +4,14 @@
 #   2. SIGNAL LOGGER: behavioural comparison of the old and the new version.
 #
 #   scripts/check_pipeline_regression.sh [BASE_COMMIT]
-# BASE_COMMIT defaults to the merge-base with origin/main (the commit before paper trading).
+# BASE_COMMIT defaults to the commit BEFORE paper trading started (fixed, so the check keeps
+# working after the work is merged into main; a merge-base with main would then be HEAD itself).
 set -euo pipefail
 cd "$(git rev-parse --show-toplevel)"
 
-BASE="${1:-$(git merge-base origin/main HEAD 2>/dev/null || git merge-base main HEAD)}"
+PAPER_BASE="7ac68817e1bf2161e1c53d60dd19ab98b23706af"   # merge of PR #23, last commit before paper trading
+BASE="${1:-$PAPER_BASE}"
+git cat-file -e "$BASE^{commit}" 2>/dev/null || { echo "base commit $BASE not found (shallow clone? use fetch-depth: 0)"; exit 2; }
 echo "base commit: $(git log --oneline -1 "$BASE")"
 
 # Allowed per spec section 3 ("Modified files"):
@@ -16,6 +19,9 @@ ALLOWED=(
   "row1/Sort & Select Top 20"
   "row4/SIGNAL LOGGER"
   "row4/SUPABASE SIGNAL INSERT — N8N CONFIG"
+  # Added later, on purpose, after a production timeout in Row 2 (ECONNABORTED on ~960 single
+  # POSTs): a NEW additive node; no existing Row 2 file is modified.
+  "row2/CANDLE BATCHER FOR UPSERT"
 )
 
 FAIL=0
