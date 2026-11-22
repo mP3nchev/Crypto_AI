@@ -1,0 +1,82 @@
+// =====================================================
+// CANDLE BATCHER FOR UPSERT v1.0                       (NEW Code node, Row 2)
+// Position: between "DEBUG + DE-DUPLICATION" and "HTTP Request Post"
+// Mode:     Run Once for All Items
+//
+// WHY
+//   DEBUG + DE-DUPLICATION emits ONE item per candle (A-06), so the HTTP node
+//   sent ~960 separate requests (LIMIT = 20). N8N fired ~50 at a time, and Supabase
+//   answered too slowly for some of them -> "ECONNABORTED timeout of 30000ms".
+//   (raw_candles_data itself is healthy: ~4k rows, unique index present, no locks.)
+//
+// WHAT
+//   Groups the candle items into a few arrays (default 200 rows). PostgREST accepts
+//   an array body and upserts it in ONE request with the same on_conflict, so the
+//   result in the table is identical, but it is ~5 requests instead of ~960.
+//   Nothing else changes: same columns, same on_conflict, same Prefer header.
+//
+// HTTP Request Post — change ONLY the body (everything else stays as it is):
+//   Method:  POST
+//   URL:     https://<PROJECT_REF>.supabase.co/rest/v1/raw_candles_data?on_conflict=symbol,interval,open_time
+//   Header:  Prefer: resolution=merge-duplicates,return=minimal      (unchanged)
+//   Body Content Type: JSON · Specify Body: Using JSON
+//   JSON Body (expression):
+//       {{ JSON.stringify($json.rows) }}
+//   Options → Batching: OFF (each item is already one big request; 5 items run in sequence is fine)
+//   Options → Timeout:  60000 ms
+//   Settings → Retry On Fail: ON, Max Tries 3, Wait 2000 ms   (upsert -> safe to repeat)
+//   Settings → On Error: Stop (do NOT continue: a missing batch means missing candles)
+//
+//   "HTTP Request Get" after it: keep "Execute Once" = ON (it must run once per cycle,
+//   not once per incoming item; before this change it received hundreds of items).
+// =====================================================
+
+const CHUNK_SIZE = 200;   // rows per request (~60 KB); lower it if a request ever times out
+
+const items = $input.all();
+
+// Same columns the HTTP node sent before (DEBUG + DE-DUPLICATION output) — nothing is added or dropped.
+const COLUMNS = [
+  'symbol', 'interval', 'cycle_timestamp', 'scan_cycle_id', 'timestamp', 'open_time', 'close_time',
+  'open_price', 'high_price', 'low_price', 'close_price', 'volume',
+  'median_volume_1h', 'median_volume_2h', 'latest_1m_price',
+];
+
+// PostgREST bulk insert requires every object to have the SAME keys, and
+// "ON CONFLICT DO UPDATE" fails if one request contains the same key twice.
+// So: normalise the keys, and keep the LAST row for each (symbol, interval, open_time).
+const byKey = new Map();
+let skipped = 0;
+for (const item of items) {
+  const j = item.json ?? {};
+  if (!j.symbol || !j.interval || j.open_time === undefined || j.open_time === null) { skipped++; continue; }
+  const row = {};
+  for (const c of COLUMNS) row[c] = j[c] === undefined ? null : j[c];
+  byKey.set(`${row.symbol}|${row.interval}|${row.open_time}`, row);
+}
+const rows = [...byKey.values()];
+const duplicates = items.length - skipped - rows.length;
+
+if (rows.length === 0) {
+  console.log('CANDLE BATCHER: nothing to write');
+  return [];
+}
+
+const total = Math.ceil(rows.length / CHUNK_SIZE);
+const out = [];
+for (let i = 0; i < rows.length; i += CHUNK_SIZE) {
+  out.push({
+    json: {
+      rows: rows.slice(i, i + CHUNK_SIZE),
+      chunk_index: out.length + 1,
+      chunk_total: total,
+      row_count: Math.min(CHUNK_SIZE, rows.length - i),
+    },
+  });
+}
+
+console.log(
+  `CANDLE BATCHER: ${items.length} items -> ${rows.length} rows in ${out.length} request(s)` +
+  ` (${duplicates} duplicate key(s) merged, ${skipped} invalid skipped)`
+);
+return out;
