@@ -1,0 +1,78 @@
+// =====================================================
+// TAAPI v1 -> v2 MIGRATION — what to change in N8N (UI settings + 4 Code nodes)
+//
+// WHY
+//   * The API key on the account is a v2 key (taapi_live_sk_...). The v1 endpoint rejects it
+//     ("You are not authenticated to query this endpoint") and no v1 key can be obtained.
+//   * v2 has NO 2h timeframe (supported: 1m 5m 15m 1h 4h 1d 1w). The pipeline uses 9 two-hour
+//     indicators, so those are computed from Binance 2h candles (same algorithms as TA-Lib,
+//     verified against the real TA-Lib). 1h and 15m indicators still come from TAAPI v2.
+//   * Result: the fields that Row 3 / Row 4 read (rsi_2h, adx_2h, ema_200_2h, ...) are unchanged.
+//
+// ROW 2 LOOP BODY — the chain after the change
+//
+//   Loop Over Items1 -> Cooldown after Batch 6 -> [IF/Wait nodes as before]
+//     -> HTTP POST TAAPI BULK            (changed, section 2)
+//     -> TAAPI RESPONSE PROCESSOR        (new code,  section 3)
+//     -> Binance Klines 2h               (NEW HTTP node, section 4)
+//     -> 2H INDICATOR CALCULATOR         (NEW Code node, section 5)
+//     -> Final post to DB                (unchanged)
+//
+// -----------------------------------------------------
+// 1. Credential (the API key goes ONLY here — never in a node, never in git)
+//   Credentials -> Create -> "Header Auth"
+//     Name:         TAAPI v2
+//     Header Name:  Authorization
+//     Header Value: Bearer <YOUR_V2_KEY>        (the word Bearer, one space, the key; no quotes)
+//
+// 2. HTTP POST TAAPI BULK
+//   Method POST · URL https://v2.taapi.io/bulk
+//   Authentication: Generic Credential Type -> Header Auth -> "TAAPI v2"
+//   Send Headers: off · Send Query Parameters: off
+//   Send Body: on · Body Content Type: JSON · Specify Body: Using JSON
+//   JSON (expression):   {{ JSON.stringify({ constructs: $json.constructs }) }}
+//   Delete the old body fields ("secret", "construct").
+//   Options -> Response -> "Include Response Headers and Status": OFF  (the processor reads the body directly)
+//   Settings: Retry On Fail ON (2-3 tries) · On Error: Stop
+//   Plan: Pro (3 constructs per request). The request now has 2 constructs (1h, 15m): 11 indicators.
+//
+// 3. Code "Separation of Requests" and "TAAPI RESPONSE PROCESSOR"
+//   Replace the code with row2/Separation of Requests and row2/TAAPI RESPONSE PROCESSOR.
+//   Processor mode: Run Once for All Items.
+//
+// 4. NEW HTTP Request node "Binance Klines 2h" (after TAAPI RESPONSE PROCESSOR)
+//   Method GET · URL https://api.binance.com/api/v3/klines          (public, no key; same host as Row 1)
+//   Send Query Parameters: on
+//       symbol   = {{ $json.symbol }}
+//       interval = 2h
+//       limit    = 1000
+//   Options -> Response -> "Include Response Headers and Status": ON   (item.json = { body: [...], statusCode })
+//   Settings: Retry On Fail ON (3 tries, 2000 ms) · On Error: Continue (a failing symbol only loses its 2h fields)
+//   Weight: ~5 per request, ~100 per cycle (Binance allows 6000/min).
+//
+// 5. NEW Code node "2H INDICATOR CALCULATOR" (after Binance Klines 2h)
+//   Mode: Run Once for All Items · paste row2/2H INDICATOR CALCULATOR
+//   The node names it references MUST be exactly:  TAAPI RESPONSE PROCESSOR
+//
+// -----------------------------------------------------
+// FIRST RUN CHECK
+//   a) HTTP POST TAAPI BULK output: keys like BTCUSDT_1h / BTCUSDT_15m with rsi, macd, ... inside.
+//   b) TAAPI RESPONSE PROCESSOR log: "SUMMARY: N symbol(s) processed, 0 error response(s)".
+//   c) 2H INDICATOR CALCULATOR log: "N symbol(s), N with all 12 two-hour fields".
+//      A new listing with < 200 two-hour candles (16 days) lacks ema_200_2h only (logged, never invented).
+//   d) Final post to DB receives the same fields as before (rsi_2h, macd_value_2h, ... 26 indicator fields).
+//   e) Supabase: select symbol, rsi_2h, adx_2h, ema_200_2h, rsi_1h from scan_results order by created_at desc limit 5;
+//      (table name as in your project) — no NULLs in the 2h columns.
+//
+// CHECK AGAINST TAAPI (once, on your computer) — see tools/validate_2h_vs_taapi.html:
+//   run scripts/taapi_v2_validation_command.js -> PowerShell asks TAAPI for the SAME 9 indicators on 1h,
+//   paste the result into the page: it recomputes them from Binance candles with the production library
+//   and shows the difference per indicator (all rows should say MATCH).
+//
+// NOTES / LIMITS
+//   * Every algorithm was compared with the real TA-Lib (the library behind TAAPI) on 22 random data sets x 6
+//     scenarios: agreement ~1e-12. Whether TAAPI's own build behaves identically is what the page above checks.
+//   * StochRSI uses TA-Lib STOCHRSI(14, fastK 3, fastD 3) = the parameters of the old v1 2h request.
+//   * Tiny prices (e.g. 1e-8): checked against TA-Lib too - RSI stays correct, no special case needed.
+//   * The partially formed Binance candle is dropped (= v1 "backtrack: 1": last closed candle).
+// =====================================================

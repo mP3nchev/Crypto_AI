@@ -1,0 +1,224 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>2h indicators vs TAAPI</title>
+<style>
+ body{background:#0B0E14;color:#E2E8F0;font:14px Inter,system-ui,sans-serif;margin:0;padding:24px;max-width:980px}
+ h1{font-size:18px;margin:0 0 4px} p{color:#94A3B8;margin:4px 0 14px} label{display:block;margin:12px 0 4px;font-weight:600}
+ textarea,input,select{width:100%;box-sizing:border-box;background:#151A23;border:1px solid #232A3B;color:#E2E8F0;border-radius:8px;padding:8px;font:13px ui-monospace,Consolas,monospace}
+ textarea{height:170px} button{margin-top:12px;background:#2979FF;border:0;color:#fff;font-weight:600;padding:10px 18px;border-radius:8px;cursor:pointer}
+ table{border-collapse:collapse;width:100%;margin-top:16px} th,td{border-bottom:1px solid #232A3B;padding:6px 8px;text-align:right;font:13px ui-monospace,Consolas,monospace}
+ th:first-child,td:first-child{text-align:left} .ok{color:#00E676} .bad{color:#FF3B69} .warn{color:#FFB300} #msg{margin-top:12px;white-space:pre-wrap}
+</style></head><body>
+<h1>2h indicators: my calculation vs TAAPI</h1>
+<p>Runs on your computer only. Nothing is uploaded and your TAAPI key is never needed here.
+ 1) Run the PowerShell command from the chat (it asks TAAPI for the SAME indicators on the <b>1h</b> timeframe).
+ 2) Paste its output below. 3) Press Compare: the page downloads the Binance candles, calculates the indicators with the
+ exact library used in N8N, and shows the difference to TAAPI.</p>
+<label>Symbol (the one used in the PowerShell command)</label><input id="sym" value="BTCUSDT">
+<label>TAAPI response (the JSON printed by PowerShell)</label><textarea id="resp" placeholder='{ "BTCUSDT_1h": { "rsi": { "value": [ ... ] }, ... } }'></textarea>
+<button id="go">Compare</button><div id="msg"></div><div id="out"></div>
+<script>
+// ---------- indicator library (TA-Lib algorithms) -------------------------------------
+const lastOf = (a) => a[a.length - 1];
+
+function sma(values, n) {                      // returns array aligned to input (NaN before n-1)
+  const out = new Array(values.length).fill(NaN);
+  let sum = 0;
+  for (let i = 0; i < values.length; i++) {
+    sum += values[i];
+    if (i >= n) sum -= values[i - n];
+    if (i >= n - 1) out[i] = sum / n;
+  }
+  return out;
+}
+
+function ema(values, n, startAt = 0) {        // TA-Lib: seed = SMA of the first n values from startAt
+  const out = new Array(values.length).fill(NaN);
+  if (values.length - startAt < n) return out;
+  const k = 2 / (n + 1);
+  let sum = 0;
+  for (let i = startAt; i < startAt + n; i++) sum += values[i];
+  let prev = sum / n;
+  out[startAt + n - 1] = prev;
+  for (let i = startAt + n; i < values.length; i++) {
+    prev = (values[i] - prev) * k + prev;
+    out[i] = prev;
+  }
+  return out;
+}
+
+function rsi(close, n = 14) {                  // Wilder smoothing, first average = simple mean
+  const out = new Array(close.length).fill(NaN);
+  if (close.length <= n) return out;
+  let gain = 0, loss = 0;
+  for (let i = 1; i <= n; i++) {
+    const d = close[i] - close[i - 1];
+    if (d > 0) gain += d; else loss -= d;
+  }
+  gain /= n; loss /= n;
+  // same operation order as TA-Lib (100 * (gain / (gain + loss))): identical rounding matters for StochRSI plateaus
+  const calc = () => (gain + loss === 0 ? 0 : 100 * (gain / (gain + loss)));
+  out[n] = calc();
+  for (let i = n + 1; i < close.length; i++) {
+    const d = close[i] - close[i - 1];
+    gain = (gain * (n - 1) + (d > 0 ? d : 0)) / n;
+    loss = (loss * (n - 1) + (d < 0 ? -d : 0)) / n;
+    out[i] = calc();
+  }
+  return out;
+}
+
+function macd(close, fast = 12, slow = 26, signal = 9) {
+  const f = ema(close, fast), s = ema(close, slow);
+  const line = close.map((_, i) => (Number.isNaN(f[i]) || Number.isNaN(s[i]) ? NaN : f[i] - s[i]));
+  const first = line.findIndex((x) => !Number.isNaN(x));
+  const sig = first < 0 ? line.map(() => NaN) : ema(line, signal, first);
+  const hist = line.map((x, i) => (Number.isNaN(x) || Number.isNaN(sig[i]) ? NaN : x - sig[i]));
+  return { line, signal: sig, hist };
+}
+
+function adx(high, low, close, n = 14) {       // Wilder: smoothed TR / +DM / -DM, DX, ADX
+  const out = new Array(close.length).fill(NaN);
+  if (close.length < 2 * n + 1) return out;
+  let tr = 0, pdm = 0, mdm = 0;
+  const parts = (i) => {
+    const up = high[i] - high[i - 1], dn = low[i - 1] - low[i];
+    return [
+      Math.max(high[i] - low[i], Math.abs(high[i] - close[i - 1]), Math.abs(low[i] - close[i - 1])),
+      up > dn && up > 0 ? up : 0,
+      dn > up && dn > 0 ? dn : 0,
+    ];
+  };
+  // TA-Lib: the first n-1 values are plain sums; the n-th value already enters through the Wilder step
+  for (let i = 1; i <= n - 1; i++) { const [t, p, m] = parts(i); tr += t; pdm += p; mdm += m; }
+  {
+    const [t, p, m] = parts(n);
+    tr = tr - tr / n + t; pdm = pdm - pdm / n + p; mdm = mdm - mdm / n + m;
+  }
+  const dx = () => {
+    const pdi = tr === 0 ? 0 : (100 * pdm) / tr, mdi = tr === 0 ? 0 : (100 * mdm) / tr;
+    return pdi + mdi === 0 ? 0 : (100 * Math.abs(pdi - mdi)) / (pdi + mdi);
+  };
+  let dxSum = dx(), cnt = 1, adxVal = NaN;
+  for (let i = n + 1; i < close.length; i++) {
+    const [t, p, m] = parts(i);
+    tr = tr - tr / n + t; pdm = pdm - pdm / n + p; mdm = mdm - mdm / n + m;
+    const d = dx();
+    if (cnt < n) { dxSum += d; cnt++; if (cnt === n) { adxVal = dxSum / n; out[i] = adxVal; } }
+    else { adxVal = (adxVal * (n - 1) + d) / n; out[i] = adxVal; }
+  }
+  return out;
+}
+
+function stochRsi(close, n = 14, fastK = 3, fastD = 3) {   // TA-Lib STOCHRSI: STOCHF over the RSI series
+  const r = rsi(close, n);
+  const k = new Array(close.length).fill(NaN);
+  for (let i = 0; i < close.length; i++) {
+    if (i - fastK + 1 < 0) continue;
+    let hh = -Infinity, ll = Infinity, ok = true;
+    for (let j = i - fastK + 1; j <= i; j++) { if (Number.isNaN(r[j])) { ok = false; break; } hh = Math.max(hh, r[j]); ll = Math.min(ll, r[j]); }
+    if (!ok) continue;
+    // RSI on a plateau (price unchanged) is constant: a range below 1e-9 is float noise, not a real range
+    const diff = (hh - ll) / 100;                       // TA-Lib STOCHF arithmetic
+    k[i] = hh - ll > 1e-9 ? (r[i] - ll) / diff : 0;
+  }
+  const d = new Array(close.length).fill(NaN);
+  for (let i = 0; i < close.length; i++) {
+    if (i - fastD + 1 < 0) continue;
+    let s = 0, ok = true;
+    for (let j = i - fastD + 1; j <= i; j++) { if (Number.isNaN(k[j])) { ok = false; break; } s += k[j]; }
+    if (ok) d[i] = s / fastD;
+  }
+  return { k, d };
+}
+
+function willr(high, low, close, n = 14) {
+  const out = new Array(close.length).fill(NaN);
+  for (let i = n - 1; i < close.length; i++) {
+    let hh = -Infinity, ll = Infinity;
+    for (let j = i - n + 1; j <= i; j++) { hh = Math.max(hh, high[j]); ll = Math.min(ll, low[j]); }
+    out[i] = hh === ll ? 0 : (-100 * (hh - close[i])) / (hh - ll);
+  }
+  return out;
+}
+
+function mfi(high, low, close, volume, n = 14) {
+  const out = new Array(close.length).fill(NaN);
+  const tp = close.map((c, i) => (high[i] + low[i] + c) / 3);
+  const pos = new Array(close.length).fill(0), neg = new Array(close.length).fill(0);
+  for (let i = 1; i < close.length; i++) {
+    const flow = tp[i] * volume[i], dlt = tp[i] - tp[i - 1];
+    // TA-Lib treats |change| < 1e-8 as "no change" (its TA_IS_ZERO): float noise must not count as up/down
+    if (dlt >= 1e-8) pos[i] = flow; else if (dlt <= -1e-8) neg[i] = flow;
+  }
+  for (let i = n; i < close.length; i++) {
+    let p = 0, q = 0;
+    for (let j = i - n + 1; j <= i; j++) { p += pos[j]; q += neg[j]; }
+    out[i] = p + q === 0 ? 0 : (100 * p) / (p + q);
+  }
+  return out;
+}
+
+// Compute the 12 output fields from Binance klines (closed candles only).
+function compute2h(klines, nowMs) {
+  const rows = klines.filter((k) => Array.isArray(k) && k.length >= 7 && Number(k[6]) < nowMs);   // drop the forming candle
+  const high = rows.map((k) => Number(k[2])), low = rows.map((k) => Number(k[3]));
+  const close = rows.map((k) => Number(k[4])), volume = rows.map((k) => Number(k[5]));
+  const out = {};
+  const put = (field, series) => { const v = lastOf(series); if (series.length && Number.isFinite(v)) out[field] = v; };
+  if (rows.length === 0) return { fields: out, candles: 0 };
+
+  put('rsi_2h', rsi(close, 14));
+  const m = macd(close);
+  put('macd_value_2h', m.line); put('macd_signal_2h', m.signal); put('macd_histogram_2h', m.hist);
+  put('adx_2h', adx(high, low, close, 14));
+  put('ema_200_2h', ema(close, 200)); put('ema_20_2h', ema(close, 20)); put('ema_50_2h', ema(close, 50));
+  const sr = stochRsi(close, 14, 3, 3);
+  put('stochrsi_k_2h', sr.k); put('stochrsi_d_2h', sr.d);
+  put('willr_2h', willr(high, low, close, 14));
+  put('mfi_2h', mfi(high, low, close, volume, 14));
+  return { fields: out, candles: rows.length, lastCloseTime: Number(rows[rows.length - 1][6]) };
+}
+
+
+const MAP = [
+  ['rsi','value','rsi_2h'],['macd','valueMACD','macd_value_2h'],['macd','valueMACDSignal','macd_signal_2h'],['macd','valueMACDHist','macd_histogram_2h'],
+  ['adx','value','adx_2h'],['ema200','value','ema_200_2h'],['ema20','value','ema_20_2h'],['ema50','value','ema_50_2h'],
+  ['stochrsi','valueFastK','stochrsi_k_2h'],['stochrsi','valueFastD','stochrsi_d_2h'],['willr','value','willr_2h'],['mfi','value','mfi_2h']];
+const $ = (id) => document.getElementById(id);
+const fmt = (x) => (typeof x === 'number' ? x.toFixed(6) : '—');
+$('go').onclick = async () => {
+  $('msg').textContent = 'Working…'; $('out').innerHTML = '';
+  try {
+    const sym = $('sym').value.trim().toUpperCase();
+    let taapi = JSON.parse($('resp').value);
+    const key = Object.keys(taapi).find((k) => k.startsWith(sym)) || Object.keys(taapi)[0];
+    const res = taapi[key];
+    const ts = (res.rsi && res.rsi.timestamp && res.rsi.timestamp[0]) || (Object.values(res)[0].timestamp || [])[0];
+    if (!ts) throw new Error('No timestamp in the TAAPI response.');
+    const r = await fetch('https://api.binance.com/api/v3/klines?symbol=' + sym + '&interval=1h&limit=1000');
+    if (!r.ok) throw new Error('Binance answered HTTP ' + r.status);
+    const all = await r.json();
+    // TAAPI says which candle it used (timestamp): use the candles up to and including that one
+    const kl = all.filter((k) => k[0] <= ts * 1000);
+    if (!kl.length || kl[kl.length - 1][0] !== ts * 1000) throw new Error('Candle ' + new Date(ts * 1000).toISOString() + ' is not in the last 1000 Binance candles (run the PowerShell command again, then Compare immediately).');
+    const mine = compute2h(kl, Infinity).fields;
+    // alternative StochRSI settings, to see which one TAAPI uses by default
+    const close = kl.map((k) => Number(k[4])); const alt = stochRsi(close, 14, 5, 3);
+    let html = '<table><tr><th>indicator</th><th>TAAPI</th><th>mine</th><th>difference</th><th>status</th></tr>', worst = 0, missing = 0;
+    for (const [id, k, field] of MAP) {
+      const t = res[id] && res[id][k] && res[id][k][0];
+      const m = mine[field];
+      if (typeof t !== 'number' || typeof m !== 'number') { missing++; html += '<tr><td>' + field + '</td><td>' + fmt(t) + '</td><td>' + fmt(m) + '</td><td>—</td><td class="warn">missing</td></tr>'; continue; }
+      const rel = Math.abs(t - m) / Math.max(1e-9, Math.abs(t)); worst = Math.max(worst, rel);
+      const cls = rel < 1e-4 ? 'ok' : rel < 1e-2 ? 'warn' : 'bad';
+      html += '<tr><td>' + field + '</td><td>' + fmt(t) + '</td><td>' + fmt(m) + '</td><td>' + (rel * 100).toExponential(2) + ' %</td><td class="' + cls + '">' + (cls === 'ok' ? 'MATCH' : cls === 'warn' ? 'close' : 'DIFFERENT') + '</td></tr>';
+    }
+    html += '</table>';
+    const tk = res.stochrsi && res.stochrsi.valueFastK && res.stochrsi.valueFastK[0];
+    const note = typeof tk === 'number' ? '\nStochRSI check: TAAPI default FastK = ' + fmt(tk) + ' | mine with fastK 3 = ' + fmt(mine.stochrsi_k_2h) + ' | mine with fastK 5 (TA-Lib default) = ' + fmt(alt.k[alt.k.length - 1]) : '';
+    $('msg').innerHTML = 'Candle used by TAAPI: ' + new Date(ts * 1000).toISOString() + ' (' + kl.length + ' candles of history).<br>Worst difference: <b class="' + (worst < 1e-4 ? 'ok' : worst < 1e-2 ? 'warn' : 'bad') + '">' + (worst * 100).toExponential(2) + ' %</b>' + (missing ? ' · ' + missing + ' value(s) missing' : '') + note.replace(/\n/g, '<br>');
+    $('out').innerHTML = html;
+  } catch (e) { $('msg').innerHTML = '<span class="bad">' + e.message + '</span>'; }
+};
+</script></body></html>

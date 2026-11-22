@@ -26,6 +26,9 @@ ALLOWED=(
   # processor are unchanged; scripts/test_taapi_v2_adapter.js proves it.
   "row2/Separation of Requests"
   "row2/TAAPI RESPONSE PROCESSOR"
+  # v2 has no 2h timeframe: the 9 two-hour indicators are computed from Binance candles (TA-Lib algorithms).
+  "row2/2H INDICATOR CALCULATOR"
+  "row2/TAAPI v2 MIGRATION — N8N CONFIG"
 )
 
 FAIL=0

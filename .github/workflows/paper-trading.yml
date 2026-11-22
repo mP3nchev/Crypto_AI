@@ -51,8 +51,18 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 22
-      - name: Only allowed files changed, SIGNAL LOGGER behaviour unchanged
+      - name: Only allowed files changed, SIGNAL LOGGER behaviour unchanged, TAAPI v2 adapter
         run: scripts/check_pipeline_regression.sh
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: 2h indicators equal the real TA-Lib (several random data sets)
+        run: |
+          pip install TA-Lib numpy
+          for seed in 7 1 42 2026; do
+            python3 scripts/talib_reference.py /tmp/ref_$seed.json $seed
+            node scripts/test_2h_indicators.js /tmp/ref_$seed.json
+          done
 
   dashboard:
     name: Dashboard (types, unit tests, build)

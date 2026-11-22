@@ -23,14 +23,15 @@ const requests = quiet(() => new Function('$input', BUILDER)({ all: () => input 
 requests.length === 3 ? ok('one request item per symbol') : bad('request count ' + requests.length);
 const r0 = requests[0].json;
 const cs = r0.constructs;
-JSON.stringify(cs.map((c) => [c.id, c.timeframe, c.indicators.length])) === JSON.stringify([['BTCUSDT_2h', '2h', 9], ['BTCUSDT_1h', '1h', 9], ['BTCUSDT_15m', '15m', 2]])
-  ? ok('3 constructs per symbol: 2h x9, 1h x9, 15m x2 (= 20 indicators, as in v1)') : bad('construct layout');
+JSON.stringify(cs.map((c) => [c.id, c.timeframe, c.indicators.length])) === JSON.stringify([['BTCUSDT_1h', '1h', 9], ['BTCUSDT_15m', '15m', 2]])
+  ? ok('2 constructs per symbol: 1h x9, 15m x2 (v2 has no 2h: those 9 come from 2H INDICATOR CALCULATOR)') : bad('construct layout');
+!cs.some((c) => c.timeframe === '2h') ? ok('no unsupported "2h" timeframe is requested') : bad('2h construct present');
 cs.every((c) => c.symbol === 'BTCUSDT' && c.exchange === 'binance' && !('interval' in c) && !('backtrack' in c))
   ? ok('symbol without slash, "timeframe" (not "interval"), exchange binance') : bad('construct fields');
 cs.flatMap((c) => c.indicators).every((i) => i.backtrack === 1 && !('optInTimePeriod' in i)) ? ok('backtrack:1 on every indicator, no v1 "optInTimePeriod"') : bad('indicator params');
 const periods = Object.fromEntries(cs.flatMap((c) => c.indicators.filter((i) => i.period).map((i) => [c.timeframe + '_' + i.id, i.period])));
-JSON.stringify(periods) === JSON.stringify({ '2h_rsi': 14, '2h_adx': 14, '2h_ema200': 200, '2h_willr': 14, '2h_mfi': 14, '2h_ema20': 20, '2h_ema50': 50, '1h_rsi': 14, '1h_atr': 14, '1h_ema20': 20, '1h_ema50': 50, '15m_willr': 14, '15m_rsi': 14 })
-  ? ok('periods preserved from v1 (rsi/adx/willr/mfi/atr 14, ema 20/50/200)') : bad('periods ' + JSON.stringify(periods));
+JSON.stringify(periods) === JSON.stringify({ '1h_rsi': 14, '1h_atr': 14, '1h_ema20': 20, '1h_ema50': 50, '15m_willr': 14, '15m_rsi': 14 })
+  ? ok('periods preserved from v1 (rsi/atr/willr 14, ema 20/50)') : bad('periods ' + JSON.stringify(periods));
 !JSON.stringify(requests).includes('secret') ? ok('no API key / "secret" in the request items') : bad('secret leaked into items');
 const body = JSON.stringify({ constructs: r0.constructs });
 body.length < 8000 ? ok(`request body ${body.length} bytes`) : bad('body too large');
@@ -64,39 +65,52 @@ const f0 = full[0].json;
 const meta = ['symbol_id', 'symbol', 'cycle_timestamp', 'scan_cycle_id', 'scan_time', 'scan_date', 'sma_20'];
 const got = Object.keys(f0).filter((k) => !meta.includes(k)).sort();
 const v1Indicator = v1Fields.filter((k) => !meta.includes(k));
-JSON.stringify(got) === JSON.stringify(v1Indicator)
-  ? ok(`same ${got.length} indicator fields as the v1 processor`) : bad(`field mismatch\n   v1 only: ${v1Indicator.filter((k) => !got.includes(k))}\n   v2 only: ${got.filter((k) => !v1Indicator.includes(k))}`);
+const twoH = v1Indicator.filter((k) => k.endsWith('_2h'));
+const rest = v1Indicator.filter((k) => !k.endsWith('_2h'));
+JSON.stringify(got) === JSON.stringify(rest)
+  ? ok(`processor returns the ${got.length} non-2h fields of the v1 processor (1h + 15m)`) : bad(`field mismatch\n   v1 only: ${rest.filter((k) => !got.includes(k))}\n   v2 only: ${got.filter((k) => !rest.includes(k))}`);
+{ // processor + 2H INDICATOR CALCULATOR together must reproduce the complete v1 field set
+  const CALC = fs.readFileSync('row2/2H INDICATOR CALCULATOR', 'utf8');
+  const H2 = 2 * 3600e3, t0 = Math.floor(Date.now() / H2) * H2;
+  const kl = Array.from({ length: 400 }, (_, i) => { const o = t0 - (399 - i) * H2, c = 100 + Math.sin(i / 7) * 5 + i * 0.01; return [o, c - 0.2, c + 1, c - 1, c, 1000 + i, o + H2 - 1, 0, 1, 0, 0, 0].map(String); });
+  const merged = quiet(() => new Function('$input', '$', CALC)({ all: () => full.map(() => ({ json: { body: kl, statusCode: 200 } })) },
+    (n) => { if (n !== 'TAAPI RESPONSE PROCESSOR') throw new Error(n); return { all: () => full }; }));
+  const allKeys = Object.keys(merged[0].json).filter((k) => !meta.includes(k)).sort();
+  JSON.stringify(allKeys) === JSON.stringify(v1Indicator)
+    ? ok(`processor + 2H calculator = all ${allKeys.length} indicator fields of the v1 pipeline (names identical)`) : bad(`combined mismatch\n   v1 only: ${v1Indicator.filter((k) => !allKeys.includes(k))}\n   new only: ${allKeys.filter((k) => !v1Indicator.includes(k))}`);
+  merged.length === 3 && merged[0].json.sma_20 === 100 && merged[0].json.rsi_1h !== undefined ? ok('metadata and TAAPI values survive the 2h step') : bad('metadata lost in 2h step');
+}
 meta.every((k) => k in f0) && f0.sma_20 === 100 && full[2].json.sma_20 === 102 && f0.symbol === 'BTCUSDT'
   ? ok('metadata + sma_20 carried over from the original request per symbol') : bad('metadata');
 
 // value mapping spot checks (each field gets the number the matching construct/indicator/key produced)
 const chk = (field, key) => expected[key] === f0[field] ? null : `${field}: expected ${expected[key]} got ${f0[field]}`;
 const errs = [
-  chk('rsi_2h', 'BTCUSDT_2h|rsi|value'), chk('macd_signal_2h', 'BTCUSDT_2h|macd|valueMACDSignal'), chk('macd_histogram_1h', 'BTCUSDT_1h|macd|valueMACDHist'),
-  chk('ema_200_2h', 'BTCUSDT_2h|ema200|value'), chk('ema_20_1h', 'BTCUSDT_1h|ema20|value'), chk('stochrsi_k_2h', 'BTCUSDT_2h|stochrsi|valueFastK'),
+  chk('macd_signal_1h', 'BTCUSDT_1h|macd|valueMACDSignal'), chk('macd_histogram_1h', 'BTCUSDT_1h|macd|valueMACDHist'),
+  chk('ema_20_1h', 'BTCUSDT_1h|ema20|value'), chk('stochrsi_k_1h', 'BTCUSDT_1h|stochrsi|valueFastK'),
   chk('stochrsi_d_1h', 'BTCUSDT_1h|stochrsi|valueFastD'), chk('rsi_15m', 'BTCUSDT_15m|rsi|value'), chk('willr_15m', 'BTCUSDT_15m|willr|value'), chk('atr_1h', 'BTCUSDT_1h|atr|value'),
 ].filter(Boolean);
-errs.length === 0 ? ok('values land in the right fields (2h/1h/15m do not mix, macd/stochrsi sub-values correct)') : bad(errs.join('; '));
+errs.length === 0 ? ok('values land in the right fields (1h/15m do not mix, macd/stochrsi sub-values correct)') : bad(errs.join('; '));
 // every expected value is mapped exactly once
 const used = new Set(Object.values(f0).filter((v) => typeof v === 'number' && !Number.isInteger(v) || (typeof v === 'number' && String(v).endsWith('.5'))));
 Object.entries(expected).filter(([k]) => k.startsWith('BTCUSDT')).every(([, v]) => used.has(v)) ? ok('every returned number is used, none dropped') : bad('some returned numbers were not mapped');
 
 // ---- 4. robustness ---------------------------------------------------------------------
 { // symbol split over two responses (e.g. a plan limited to 1 construct per request) -> merged into ONE result
-  const a = respond(requests[0].json, ['BTCUSDT_2h']), b = respond(requests[0].json, ['BTCUSDT_1h', 'BTCUSDT_15m']);
+  const a = respond(requests[0].json, ['BTCUSDT_1h']), b = respond(requests[0].json, ['BTCUSDT_15m']);
   const merged = run([a, b]);
-  merged.length === 1 && 'rsi_2h' in merged[0].json && 'rsi_1h' in merged[0].json && 'rsi_15m' in merged[0].json
+  merged.length === 1 && 'rsi_1h' in merged[0].json && 'rsi_15m' in merged[0].json
     ? ok('constructs of one symbol arriving in separate responses are merged into one result') : bad('split merge');
 }
 { // a missing indicator and an error object must not crash or invent numbers
-  const r = respond(requests[0].json); delete r.BTCUSDT_1h.obv; r.BTCUSDT_2h.mfi = { error: 'Indicator failed' };
+  const r = respond(requests[0].json); delete r.BTCUSDT_1h.obv; r.BTCUSDT_1h.atr = { error: 'Indicator failed' };
   const res = run([r])[0].json;
-  !('obv_1h' in res) && !('mfi_2h' in res) && res.rsi_2h !== undefined ? ok('missing / errored indicator -> field absent, rest intact (no fake values)') : bad('missing indicator handling');
+  !('obv_1h' in res) && !('atr_1h' in res) && res.rsi_1h !== undefined ? ok('missing / errored indicator -> field absent, rest intact (no fake values)') : bad('missing indicator handling');
 }
 { // multi-element arrays use the last value; non-numeric values are ignored
-  const r = respond(requests[0].json); r.BTCUSDT_2h.rsi.value = [1, 2, 3]; r.BTCUSDT_2h.adx.value = ['x'];
+  const r = respond(requests[0].json); r.BTCUSDT_1h.rsi.value = [1, 2, 3]; r.BTCUSDT_1h.vwap.value = ['x'];
   const res = run([r])[0].json;
-  res.rsi_2h === 3 && !('adx_2h' in res) ? ok('array with several values -> last; non-numeric ignored') : bad('array handling');
+  res.rsi_1h === 3 && !('vwap_1h' in res) ? ok('array with several values -> last; non-numeric ignored') : bad('array handling');
 }
 { // HTTP error body / empty input
   const res = run([{ error: 'Invalid or inactive token' }]);

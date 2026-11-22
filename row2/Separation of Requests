@@ -4,6 +4,10 @@ const validItems = $input.all().filter(item => !item.json.exclude_from_taapi);
 // =====================================================
 // TAAPI v2 MIGRATION                                       (was v1: api.taapi.io)
 //
+// !! v2 has NO 2h timeframe (supported: 1m 5m 15m 1h 4h 1d 1w) and v1 is not available.
+//    TAAPI is therefore asked only for 1h (9 indicators) and 15m (2 indicators). The 9 two-hour
+//    indicators are computed from Binance candles by the node "2H INDICATOR CALCULATOR".
+//
 // v2 API (verified on the user's account with a live test):
 //   POST https://v2.taapi.io/bulk
 //   Header   Authorization: Bearer <API KEY>      <- NOT in the body any more
@@ -97,20 +101,6 @@ for (let i = 0; i < inputItems.length; i++) {
   };
 
   const constructs = [
-    {
-      id: `${symbol}_2h`, exchange: "binance", symbol: symbolTaapi, timeframe: "2h",
-      indicators: [
-        ind('rsi', 'rsi', 14),
-        ind('macd', 'macd'),
-        ind('adx', 'adx', 14),
-        ind('ema200', 'ema', 200),
-        ind('stochrsi', 'stochrsi'),
-        ind('willr', 'willr', 14),
-        ind('mfi', 'mfi', 14),
-        ind('ema20', 'ema', 20),
-        ind('ema50', 'ema', 50)
-      ]
-    },
     {
       id: `${symbol}_1h`, exchange: "binance", symbol: symbolTaapi, timeframe: "1h",
       indicators: [

@@ -1,0 +1,225 @@
+// =====================================================
+// 2H INDICATOR CALCULATOR                              (NEW Code node, Row 2)
+// Mode: Run Once for All Items
+//
+// WHY
+//   TAAPI v2 does not support the 2h timeframe (supported: 1m 5m 15m 1h 4h 1d 1w) and no v1 key is
+//   available. The 9 indicators of the 2h timeframe (12 output fields) are therefore computed here
+//   from Binance 2h candles, with the same algorithms as TA-Lib (the library behind TAAPI):
+//     RSI(14) · MACD(12,26,9) · ADX(14) · EMA(20/50/200) · StochRSI(14, fastK 3, fastD 3)
+//     · Williams %R(14) · MFI(14)
+//   1h and 15m indicators still come from TAAPI v2 (TAAPI RESPONSE PROCESSOR).
+//
+// POSITION (inside the Row 2 loop, after the processor):
+//   TAAPI RESPONSE PROCESSOR -> Binance Klines 2h (HTTP GET, per item) -> 2H INDICATOR CALCULATOR -> Final post to DB
+//
+// "Binance Klines 2h" HTTP Request node:
+//   Method GET · URL https://api.binance.com/api/v3/klines
+//   Query: symbol = {{ $json.symbol }}   interval = 2h   limit = 1000
+//   Options -> Response -> "Include Response Headers and Status" = ON   (item.json = { body: [...], statusCode })
+//   Settings -> Retry On Fail ON (3 tries, 2000 ms) · On Error: Continue (a missing symbol only loses its 2h fields)
+//
+// "backtrack 1" (v1) = the last CLOSED candle: the still-forming last Binance candle is dropped.
+// History: 1000 candles = 83 days, enough for EMA200 to converge. A symbol with fewer candles gets
+// only the indicators that fit (EMA200 needs 200); the others are left out, never invented.
+// Output fields are exactly those of the v1 pipeline (rsi_2h, macd_value_2h, ..., ema_200_2h).
+// =====================================================
+
+// ---------- indicator library (TA-Lib algorithms) -------------------------------------
+const lastOf = (a) => a[a.length - 1];
+
+function sma(values, n) {                      // returns array aligned to input (NaN before n-1)
+  const out = new Array(values.length).fill(NaN);
+  let sum = 0;
+  for (let i = 0; i < values.length; i++) {
+    sum += values[i];
+    if (i >= n) sum -= values[i - n];
+    if (i >= n - 1) out[i] = sum / n;
+  }
+  return out;
+}
+
+function ema(values, n, startAt = 0) {        // TA-Lib: seed = SMA of the first n values from startAt
+  const out = new Array(values.length).fill(NaN);
+  if (values.length - startAt < n) return out;
+  const k = 2 / (n + 1);
+  let sum = 0;
+  for (let i = startAt; i < startAt + n; i++) sum += values[i];
+  let prev = sum / n;
+  out[startAt + n - 1] = prev;
+  for (let i = startAt + n; i < values.length; i++) {
+    prev = (values[i] - prev) * k + prev;
+    out[i] = prev;
+  }
+  return out;
+}
+
+function rsi(close, n = 14) {                  // Wilder smoothing, first average = simple mean
+  const out = new Array(close.length).fill(NaN);
+  if (close.length <= n) return out;
+  let gain = 0, loss = 0;
+  for (let i = 1; i <= n; i++) {
+    const d = close[i] - close[i - 1];
+    if (d > 0) gain += d; else loss -= d;
+  }
+  gain /= n; loss /= n;
+  // same operation order as TA-Lib (100 * (gain / (gain + loss))): identical rounding matters for StochRSI plateaus
+  const calc = () => (gain + loss === 0 ? 0 : 100 * (gain / (gain + loss)));
+  out[n] = calc();
+  for (let i = n + 1; i < close.length; i++) {
+    const d = close[i] - close[i - 1];
+    gain = (gain * (n - 1) + (d > 0 ? d : 0)) / n;
+    loss = (loss * (n - 1) + (d < 0 ? -d : 0)) / n;
+    out[i] = calc();
+  }
+  return out;
+}
+
+function macd(close, fast = 12, slow = 26, signal = 9) {
+  const f = ema(close, fast), s = ema(close, slow);
+  const line = close.map((_, i) => (Number.isNaN(f[i]) || Number.isNaN(s[i]) ? NaN : f[i] - s[i]));
+  const first = line.findIndex((x) => !Number.isNaN(x));
+  const sig = first < 0 ? line.map(() => NaN) : ema(line, signal, first);
+  const hist = line.map((x, i) => (Number.isNaN(x) || Number.isNaN(sig[i]) ? NaN : x - sig[i]));
+  return { line, signal: sig, hist };
+}
+
+function adx(high, low, close, n = 14) {       // Wilder: smoothed TR / +DM / -DM, DX, ADX
+  const out = new Array(close.length).fill(NaN);
+  if (close.length < 2 * n + 1) return out;
+  let tr = 0, pdm = 0, mdm = 0;
+  const parts = (i) => {
+    const up = high[i] - high[i - 1], dn = low[i - 1] - low[i];
+    return [
+      Math.max(high[i] - low[i], Math.abs(high[i] - close[i - 1]), Math.abs(low[i] - close[i - 1])),
+      up > dn && up > 0 ? up : 0,
+      dn > up && dn > 0 ? dn : 0,
+    ];
+  };
+  // TA-Lib: the first n-1 values are plain sums; the n-th value already enters through the Wilder step
+  for (let i = 1; i <= n - 1; i++) { const [t, p, m] = parts(i); tr += t; pdm += p; mdm += m; }
+  {
+    const [t, p, m] = parts(n);
+    tr = tr - tr / n + t; pdm = pdm - pdm / n + p; mdm = mdm - mdm / n + m;
+  }
+  const dx = () => {
+    const pdi = tr === 0 ? 0 : (100 * pdm) / tr, mdi = tr === 0 ? 0 : (100 * mdm) / tr;
+    return pdi + mdi === 0 ? 0 : (100 * Math.abs(pdi - mdi)) / (pdi + mdi);
+  };
+  let dxSum = dx(), cnt = 1, adxVal = NaN;
+  for (let i = n + 1; i < close.length; i++) {
+    const [t, p, m] = parts(i);
+    tr = tr - tr / n + t; pdm = pdm - pdm / n + p; mdm = mdm - mdm / n + m;
+    const d = dx();
+    if (cnt < n) { dxSum += d; cnt++; if (cnt === n) { adxVal = dxSum / n; out[i] = adxVal; } }
+    else { adxVal = (adxVal * (n - 1) + d) / n; out[i] = adxVal; }
+  }
+  return out;
+}
+
+function stochRsi(close, n = 14, fastK = 3, fastD = 3) {   // TA-Lib STOCHRSI: STOCHF over the RSI series
+  const r = rsi(close, n);
+  const k = new Array(close.length).fill(NaN);
+  for (let i = 0; i < close.length; i++) {
+    if (i - fastK + 1 < 0) continue;
+    let hh = -Infinity, ll = Infinity, ok = true;
+    for (let j = i - fastK + 1; j <= i; j++) { if (Number.isNaN(r[j])) { ok = false; break; } hh = Math.max(hh, r[j]); ll = Math.min(ll, r[j]); }
+    if (!ok) continue;
+    // RSI on a plateau (price unchanged) is constant: a range below 1e-9 is float noise, not a real range
+    const diff = (hh - ll) / 100;                       // TA-Lib STOCHF arithmetic
+    k[i] = hh - ll > 1e-9 ? (r[i] - ll) / diff : 0;
+  }
+  const d = new Array(close.length).fill(NaN);
+  for (let i = 0; i < close.length; i++) {
+    if (i - fastD + 1 < 0) continue;
+    let s = 0, ok = true;
+    for (let j = i - fastD + 1; j <= i; j++) { if (Number.isNaN(k[j])) { ok = false; break; } s += k[j]; }
+    if (ok) d[i] = s / fastD;
+  }
+  return { k, d };
+}
+
+function willr(high, low, close, n = 14) {
+  const out = new Array(close.length).fill(NaN);
+  for (let i = n - 1; i < close.length; i++) {
+    let hh = -Infinity, ll = Infinity;
+    for (let j = i - n + 1; j <= i; j++) { hh = Math.max(hh, high[j]); ll = Math.min(ll, low[j]); }
+    out[i] = hh === ll ? 0 : (-100 * (hh - close[i])) / (hh - ll);
+  }
+  return out;
+}
+
+function mfi(high, low, close, volume, n = 14) {
+  const out = new Array(close.length).fill(NaN);
+  const tp = close.map((c, i) => (high[i] + low[i] + c) / 3);
+  const pos = new Array(close.length).fill(0), neg = new Array(close.length).fill(0);
+  for (let i = 1; i < close.length; i++) {
+    const flow = tp[i] * volume[i], dlt = tp[i] - tp[i - 1];
+    // TA-Lib treats |change| < 1e-8 as "no change" (its TA_IS_ZERO): float noise must not count as up/down
+    if (dlt >= 1e-8) pos[i] = flow; else if (dlt <= -1e-8) neg[i] = flow;
+  }
+  for (let i = n; i < close.length; i++) {
+    let p = 0, q = 0;
+    for (let j = i - n + 1; j <= i; j++) { p += pos[j]; q += neg[j]; }
+    out[i] = p + q === 0 ? 0 : (100 * p) / (p + q);
+  }
+  return out;
+}
+
+// Compute the 12 output fields from Binance klines (closed candles only).
+function compute2h(klines, nowMs) {
+  const rows = klines.filter((k) => Array.isArray(k) && k.length >= 7 && Number(k[6]) < nowMs);   // drop the forming candle
+  const high = rows.map((k) => Number(k[2])), low = rows.map((k) => Number(k[3]));
+  const close = rows.map((k) => Number(k[4])), volume = rows.map((k) => Number(k[5]));
+  const out = {};
+  const put = (field, series) => { const v = lastOf(series); if (series.length && Number.isFinite(v)) out[field] = v; };
+  if (rows.length === 0) return { fields: out, candles: 0 };
+
+  put('rsi_2h', rsi(close, 14));
+  const m = macd(close);
+  put('macd_value_2h', m.line); put('macd_signal_2h', m.signal); put('macd_histogram_2h', m.hist);
+  put('adx_2h', adx(high, low, close, 14));
+  put('ema_200_2h', ema(close, 200)); put('ema_20_2h', ema(close, 20)); put('ema_50_2h', ema(close, 50));
+  const sr = stochRsi(close, 14, 3, 3);
+  put('stochrsi_k_2h', sr.k); put('stochrsi_d_2h', sr.d);
+  put('willr_2h', willr(high, low, close, 14));
+  put('mfi_2h', mfi(high, low, close, volume, 14));
+  return { fields: out, candles: rows.length, lastCloseTime: Number(rows[rows.length - 1][6]) };
+}
+
+// ---------- N8N wiring ---------------------------------------------------------------------
+const FIELDS_2H = [
+  'rsi_2h', 'macd_value_2h', 'macd_signal_2h', 'macd_histogram_2h', 'adx_2h', 'ema_200_2h', 'ema_20_2h',
+  'ema_50_2h', 'stochrsi_k_2h', 'stochrsi_d_2h', 'willr_2h', 'mfi_2h',
+];
+
+const klineItems = $input.all();
+const base = $('TAAPI RESPONSE PROCESSOR').all();
+const now = Date.now();
+const results = [];
+let withAll = 0;
+
+klineItems.forEach((item, i) => {
+  const src = base[item.pairedItem?.item ?? i];
+  if (!src || !src.json || src.json.error) {
+    console.log(`2H CALC: item ${i}: no TAAPI result to attach to — skipped`);
+    return;
+  }
+  const merged = { ...src.json };
+  const body = item.json?.body ?? item.json?.data ?? null;
+
+  if (!Array.isArray(body) || item.json?.error) {
+    console.log(`2H CALC: ${merged.symbol}: no Binance candles (${item.json?.error?.message ?? item.json?.statusCode ?? 'empty'}) — 2h fields left out`);
+  } else {
+    const { fields, candles } = compute2h(body, now);
+    Object.assign(merged, fields);
+    const missing = FIELDS_2H.filter((f) => !(f in fields));
+    if (missing.length) console.log(`2H CALC: ${merged.symbol}: ${candles} closed candles, missing: ${missing.join(', ')}`);
+    else withAll++;
+  }
+  results.push({ json: merged });
+});
+
+console.log(`2H CALC: ${results.length} symbol(s), ${withAll} with all 12 two-hour fields`);
+if (results.length === 0) return base.length ? base : [{ json: { error: 'No data for 2h indicators' } }];
+return results;

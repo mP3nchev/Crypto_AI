@@ -7,7 +7,9 @@
 // Every result field is an ARRAY (even a single value). With backtrack:1 the array holds the value of
 // the last closed candle; if it ever holds more than one element, the LAST one is used (and logged).
 //
-// OUTPUT is unchanged from the v1 processor: one item per symbol with the same field names
+// NOTE: TAAPI v2 has no 2h timeframe. The 2h fields (rsi_2h, macd_*_2h, adx_2h, ema_*_2h, stochrsi_*_2h,
+// willr_2h, mfi_2h) are added AFTER this node by "2H INDICATOR CALCULATOR" (computed from Binance candles).
+// Together the two nodes give exactly the same output as the v1 processor: one item per symbol with the same field names
 // (rsi_2h, macd_value_2h, stochrsi_k_1h, ...), so "Final post to DB" and everything after it
 // need no change. The construct / indicator ids below MUST match "Separation of Requests".
 // =====================================================
@@ -16,17 +18,6 @@ console.log('=== PROCESSING TAAPI v2 RESPONSES FOR TIME-SERIES ===');
 
 // construct timeframe -> indicator id -> [[scan field, TAAPI result key], ...]
 const SPEC = {
-  '2h': {
-    rsi:      [['rsi_2h', 'value']],
-    macd:     [['macd_value_2h', 'valueMACD'], ['macd_signal_2h', 'valueMACDSignal'], ['macd_histogram_2h', 'valueMACDHist']],
-    adx:      [['adx_2h', 'value']],
-    ema200:   [['ema_200_2h', 'value']],
-    stochrsi: [['stochrsi_k_2h', 'valueFastK'], ['stochrsi_d_2h', 'valueFastD']],
-    willr:    [['willr_2h', 'value']],
-    mfi:      [['mfi_2h', 'value']],
-    ema20:    [['ema_20_2h', 'value']],
-    ema50:    [['ema_50_2h', 'value']],
-  },
   '1h': {
     rsi:      [['rsi_1h', 'value']],
     macd:     [['macd_value_1h', 'valueMACD'], ['macd_signal_1h', 'valueMACDSignal'], ['macd_histogram_1h', 'valueMACDHist']],
